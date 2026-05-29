@@ -15,10 +15,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from services.config import DATA_DIR
+from services.protocol.error_response import anthropic_error_response, openai_error_response
 from utils.helper import anthropic_sse_stream, sse_json_stream
 
 LOG_TYPE_CALL = "call"
 LOG_TYPE_ACCOUNT = "account"
+INTERNAL_RESPONSE_KEYS = {"_account_email"}
 
 
 class LogService:
@@ -127,6 +129,32 @@ def _collect_urls(value: object) -> list[str]:
     return urls
 
 
+def _collect_account_emails(value: object) -> list[str]:
+    emails: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"_account_email", "account_email"} and isinstance(item, str) and item.strip():
+                emails.append(item.strip())
+            else:
+                emails.extend(_collect_account_emails(item))
+    elif isinstance(value, list):
+        for item in value:
+            emails.extend(_collect_account_emails(item))
+    return emails
+
+
+def _strip_internal_response_fields(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _strip_internal_response_fields(item)
+            for key, item in value.items()
+            if key not in INTERNAL_RESPONSE_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_internal_response_fields(item) for item in value]
+    return value
+
+
 def _request_excerpt(text: object, limit: int = 1000) -> str:
     value = str(text or "").strip()
     if not value:
@@ -140,9 +168,8 @@ def _request_excerpt(text: object, limit: int = 1000) -> str:
 def _image_error_response(exc: Exception) -> JSONResponse:
     message = str(exc)
     if "no available image quota" in message.lower():
-        return JSONResponse(
-            status_code=429,
-            content={
+        return openai_error_response(
+            {
                 "error": {
                     "message": "no available image quota",
                     "type": "insufficient_quota",
@@ -150,20 +177,18 @@ def _image_error_response(exc: Exception) -> JSONResponse:
                     "code": "insufficient_quota",
                 }
             },
+            429,
         )
     if hasattr(exc, "to_openai_error") and hasattr(exc, "status_code"):
         return JSONResponse(status_code=int(exc.status_code), content=exc.to_openai_error())
-    return JSONResponse(
-        status_code=502,
-        content={
-            "error": {
-                "message": message,
-                "type": "server_error",
-                "param": None,
-                "code": "upstream_error",
-            }
-        },
-    )
+    return openai_error_response(message, 502)
+
+
+def _protocol_error_response(exc: Exception, status_code: int, sse: str) -> JSONResponse:
+    message = str(exc)
+    if sse == "anthropic":
+        return anthropic_error_response(message, status_code)
+    return openai_error_response(message, status_code)
 
 
 def _next_item(items):
@@ -188,31 +213,33 @@ class LoggedCall:
         try:
             result = await run_in_threadpool(handler, *args)
         except ImageGenerationError as exc:
-            self.log("调用失败", status="failed", error=str(exc))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc))
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            return _protocol_error_response(exc, 502, sse)
 
         if isinstance(result, dict):
             self.log("调用完成", result)
-            return result
+            response = dict(result)
+            response.pop("_account_email", None)
+            return response
 
         sender = anthropic_sse_stream if sse == "anthropic" else sse_json_stream
         try:
             has_first, first = await run_in_threadpool(_next_item, result)
         except ImageGenerationError as exc:
-            self.log("调用失败", status="failed", error=str(exc))
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
             return _image_error_response(exc)
         except HTTPException as exc:
             self.log("调用失败", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc))
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            return _protocol_error_response(exc, 502, sse)
         if not has_first:
             self.log("流式调用结束")
             return StreamingResponse(sender(()), media_type="text/event-stream")
@@ -220,21 +247,29 @@ class LoggedCall:
 
     def stream(self, items):
         urls: list[str] = []
+        account_emails: list[str] = []
         failed = False
         try:
             for item in items:
                 urls.extend(_collect_urls(item))
-                yield item
+                account_emails.extend(_collect_account_emails(item))
+                yield _strip_internal_response_fields(item)
         except Exception as exc:
             failed = True
-            self.log("流式调用失败", status="failed", error=str(exc), urls=urls)
+            self.log(
+                "流式调用失败",
+                status="failed",
+                error=str(exc),
+                urls=urls,
+                account_email=(account_emails[0] if account_emails else getattr(exc, "account_email", "")),
+            )
             raise
         finally:
             if not failed:
-                self.log("流式调用结束", urls=urls)
+                self.log("流式调用结束", urls=urls, account_email=account_emails[0] if account_emails else "")
 
     def log(self, suffix: str, result: object = None, status: str = "success", error: str = "",
-            urls: list[str] | None = None) -> None:
+            urls: list[str] | None = None, account_email: str = "") -> None:
         detail = {
             "key_id": self.identity.get("id"),
             "key_name": self.identity.get("name"),
@@ -251,6 +286,12 @@ class LoggedCall:
             detail["request_text"] = request_excerpt
         if error:
             detail["error"] = error
+        email = str(account_email or "").strip()
+        if not email:
+            emails = _collect_account_emails(result)
+            email = emails[0] if emails else ""
+        if email:
+            detail["account_email"] = email
         collected_urls = [*(urls or []), *_collect_urls(result)]
         if collected_urls:
             detail["urls"] = list(dict.fromkeys(collected_urls))

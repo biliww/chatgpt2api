@@ -26,10 +26,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { createAccounts, type Account } from "@/lib/api";
+import { createAccounts, type Account, type AccountImportPayload } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type ImportMethod = "menu" | "token" | "session" | "cpa";
+type ImportMethod = "menu" | "token" | "session" | "codex-auth" | "cpa";
 
 type AccountImportDialogProps = {
   disabled?: boolean;
@@ -38,6 +38,7 @@ type AccountImportDialogProps = {
 
 type PendingCpaImport = {
   tokens: string[];
+  accounts: AccountImportPayload[];
   parsedFileCount: number;
   errorCount: number;
 };
@@ -56,9 +57,52 @@ function getSessionAccessToken(value: unknown) {
   return typeof token === "string" ? token.trim() : "";
 }
 
-function getCpaAccessToken(value: unknown) {
-  const token = (value as { access_token?: unknown })?.access_token;
-  return typeof token === "string" ? token.trim() : "";
+function getCpaAccount(value: unknown): AccountImportPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const tokenValue = raw.access_token ?? raw.accessToken;
+  const token = typeof tokenValue === "string" ? tokenValue.trim() : "";
+  if (!token) {
+    return null;
+  }
+
+  const payload: AccountImportPayload = {
+    ...raw,
+    access_token: token,
+    source_type: "codex",
+  };
+  delete payload.accessToken;
+  if (payload.type === "codex") {
+    payload.export_type = "codex";
+    delete payload.type;
+  }
+  return payload;
+}
+
+function getCodexAuthAccount(value: unknown): AccountImportPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const tokenValue = raw.access_token ?? raw.accessToken;
+  const token = typeof tokenValue === "string" ? tokenValue.trim() : "";
+  if (!token) {
+    return null;
+  }
+
+  const payload: AccountImportPayload = {
+    ...raw,
+    access_token: token,
+    export_type: "codex",
+    source_type: "codex",
+  };
+  delete payload.accessToken;
+  if (payload.type === "codex") {
+    delete payload.type;
+  }
+  return payload;
 }
 
 function readFileAsText(file: File) {
@@ -108,6 +152,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
   const [method, setMethod] = useState<ImportMethod>("menu");
   const [tokenInput, setTokenInput] = useState("");
   const [sessionInput, setSessionInput] = useState("");
+  const [codexAuthInput, setCodexAuthInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingCpaImport, setPendingCpaImport] = useState<PendingCpaImport | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -119,6 +164,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     setMethod("menu");
     setTokenInput("");
     setSessionInput("");
+    setCodexAuthInput("");
     setPendingCpaImport(null);
     setConfirmOpen(false);
   };
@@ -130,7 +176,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     }
   };
 
-  const submitTokens = async (tokens: string[], successText?: string) => {
+  const submitTokens = async (tokens: string[], successText?: string, accountPayloads: AccountImportPayload[] = []) => {
     const normalizedTokens = tokens.map((item) => item.trim()).filter(Boolean);
 
     if (normalizedTokens.length === 0) {
@@ -140,7 +186,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
 
     setIsSubmitting(true);
     try {
-      const data = await createAccounts(normalizedTokens);
+      const data = await createAccounts(normalizedTokens, accountPayloads);
       onImported(data.items);
       setOpen(false);
       resetState();
@@ -217,6 +263,28 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     }
   };
 
+  const handleImportCodexAuthJson = async () => {
+    if (!codexAuthInput.trim()) {
+      toast.error("请先粘贴 Codex 认证 JSON");
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(codexAuthInput) as unknown;
+      const account = getCodexAuthAccount(payload);
+
+      if (!account) {
+        toast.error("未从 Codex 认证 JSON 中提取到 access_token");
+        return;
+      }
+
+      await submitTokens([account.access_token], "Codex 认证 JSON 导入完成", [account]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Codex 认证 JSON 解析失败";
+      toast.error(message);
+    }
+  };
+
   const handleCpaSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
@@ -230,15 +298,16 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
         files.map(async (file) => {
           const raw = await readFileAsText(file);
           const parsed = JSON.parse(raw) as unknown;
-          const token = getCpaAccessToken(parsed);
+          const account = getCpaAccount(parsed);
           return {
-            token,
+            account,
           };
         }),
       );
 
-      const tokens = results.map((item) => item.token).filter((item): item is string => Boolean(item));
-      const parsedFileCount = tokens.length;
+      const accounts = results.map((item) => item.account).filter((item): item is AccountImportPayload => Boolean(item));
+      const tokens = accounts.map((item) => item.access_token);
+      const parsedFileCount = accounts.length;
       const errorCount = results.length - parsedFileCount;
 
       if (parsedFileCount === 0) {
@@ -248,6 +317,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
 
       setPendingCpaImport({
         tokens,
+        accounts,
         parsedFileCount,
         errorCount,
       });
@@ -403,6 +473,30 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
       );
     }
 
+    if (method === "codex-auth") {
+      return (
+        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={() => setMethod("menu")}
+            className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-800"
+          >
+            <ArrowLeft className="size-4" />
+            返回导入方式
+          </button>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-stone-700">Codex 认证 JSON</label>
+            <Textarea
+              placeholder='粘贴包含 "access_token"、"refresh_token"、"id_token" 的 Codex 认证 JSON...'
+              value={codexAuthInput}
+              onChange={(event) => setCodexAuthInput(event.target.value)}
+              className="min-h-64 resize-none rounded-xl border-stone-200 font-mono text-xs"
+            />
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-3">
         <MethodCard
@@ -416,6 +510,12 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
           description="从 chatgpt.com 的 session 接口复制完整 JSON，自动提取 accessToken。"
           icon={FileJson}
           onClick={() => setMethod("session")}
+        />
+        <MethodCard
+          title="导入 Codex 认证 JSON"
+          description="粘贴 Codex 认证 JSON，导入后账号来源标记为 codex。"
+          icon={FileJson}
+          onClick={() => setMethod("codex-auth")}
         />
         <MethodCard
           title="导入 CPA JSON 文件"
@@ -469,7 +569,9 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
                   ? "导入 Access Token"
                   : method === "session"
                     ? "导入 Session JSON"
-                    : "导入 CPA JSON"}
+                    : method === "codex-auth"
+                      ? "导入 Codex 认证 JSON"
+                      : "导入 CPA JSON"}
             </DialogTitle>
             <DialogDescription className="text-sm leading-6">
               {method === "menu"
@@ -478,7 +580,9 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
                   ? "支持手动粘贴或从 TXT 文件导入，一行一个 Token。"
                   : method === "session"
                     ? "粘贴完整 Session JSON，系统会自动提取 accessToken。"
-                    : "支持一次读取多个本地 JSON 文件，并在提交前做数量确认。"}
+                    : method === "codex-auth"
+                      ? "粘贴 Codex 认证 JSON，系统会按 codex 来源导入。"
+                      : "支持一次读取多个本地 JSON 文件，并在提交前做数量确认。"}
             </DialogDescription>
           </DialogHeader>
 
@@ -507,6 +611,16 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               <Button
                 className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
                 onClick={() => void handleImportSessionJson()}
+                disabled={footerDisabled}
+              >
+                {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                导入 JSON
+              </Button>
+            ) : null}
+            {method === "codex-auth" ? (
+              <Button
+                className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+                onClick={() => void handleImportCodexAuthJson()}
                 disabled={footerDisabled}
               >
                 {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
@@ -553,7 +667,13 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
             </Button>
             <Button
               className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
-              onClick={() => void submitTokens(pendingCpaImport?.tokens ?? [], "CPA JSON 导入完成")}
+              onClick={() =>
+                void submitTokens(
+                  pendingCpaImport?.tokens ?? [],
+                  "CPA JSON 导入完成",
+                  pendingCpaImport?.accounts ?? [],
+                )
+              }
               disabled={isSubmitting || !pendingCpaImport}
             >
               {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
