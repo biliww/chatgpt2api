@@ -166,7 +166,9 @@ def _request_excerpt(text: object, limit: int = 1000) -> str:
 
 
 def _image_error_response(exc: Exception) -> JSONResponse:
-    message = str(exc)
+    from services.protocol.conversation import public_image_error_message
+
+    message = public_image_error_message(str(exc))
     if "no available image quota" in message.lower():
         return openai_error_response(
             {
@@ -206,6 +208,7 @@ class LoggedCall:
     summary: str
     started: float = field(default_factory=time.time)
     request_text: str = ""
+    request_shape: dict[str, int] | None = None
 
     async def run(self, handler, *args, sse: str = "openai"):
         from services.protocol.conversation import ImageGenerationError
@@ -220,6 +223,8 @@ class LoggedCall:
             raise
         except Exception as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            if self.endpoint.startswith("/v1/images"):
+                return _image_error_response(exc)
             return _protocol_error_response(exc, 502, sse)
 
         if isinstance(result, dict):
@@ -239,6 +244,8 @@ class LoggedCall:
             raise
         except Exception as exc:
             self.log("调用失败", status="failed", error=str(exc), account_email=getattr(exc, "account_email", ""))
+            if self.endpoint.startswith("/v1/images"):
+                return _image_error_response(exc)
             return _protocol_error_response(exc, 502, sse)
         if not has_first:
             self.log("流式调用结束")
@@ -263,6 +270,10 @@ class LoggedCall:
                 urls=urls,
                 account_email=(account_emails[0] if account_emails else getattr(exc, "account_email", "")),
             )
+            if self.endpoint.startswith("/v1/images") and not hasattr(exc, "to_openai_error"):
+                from services.protocol.conversation import ImageGenerationError, public_image_error_message
+
+                raise ImageGenerationError(public_image_error_message(str(exc))) from exc
             raise
         finally:
             if not failed:
@@ -284,6 +295,8 @@ class LoggedCall:
         request_excerpt = _request_excerpt(self.request_text)
         if request_excerpt:
             detail["request_text"] = request_excerpt
+        if self.request_shape:
+            detail["request_shape"] = self.request_shape
         if error:
             detail["error"] = error
         email = str(account_email or "").strip()
@@ -293,6 +306,6 @@ class LoggedCall:
         if email:
             detail["account_email"] = email
         collected_urls = [*(urls or []), *_collect_urls(result)]
-        if collected_urls:
+        if collected_urls and not self.endpoint.startswith("/v1/search"):
             detail["urls"] = list(dict.fromkeys(collected_urls))
         log_service.add(LOG_TYPE_CALL, f"{self.summary}{suffix}", detail)

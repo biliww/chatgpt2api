@@ -35,6 +35,7 @@ export type Account = {
   success: number;
   fail: number;
   last_used_at?: string | null;
+  proxy?: string | null;
 };
 
 export type AccountImportPayload = {
@@ -303,6 +304,27 @@ export async function createAccounts(tokens: string[], accounts: AccountImportPa
   });
 }
 
+export type OAuthLoginStartResponse = {
+  session_id: string;
+  authorize_url: string;
+  expires_in: string;
+  redirect_uri_prefix: string;
+};
+
+export async function startOAuthLogin(emailHint?: string) {
+  return httpRequest<OAuthLoginStartResponse>("/api/accounts/oauth/start", {
+    method: "POST",
+    body: { email_hint: emailHint ?? "" },
+  });
+}
+
+export async function finishOAuthLogin(sessionId: string, callback: string) {
+  return httpRequest<AccountMutationResponse>("/api/accounts/oauth/finish", {
+    method: "POST",
+    body: { session_id: sessionId, callback },
+  });
+}
+
 export async function deleteAccounts(tokens: string[]) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "DELETE",
@@ -323,6 +345,7 @@ export async function updateAccount(
     type?: AccountType;
     status?: AccountStatus;
     quota?: number;
+    proxy?: string;
   },
 ) {
   return httpRequest<AccountUpdateResponse>("/api/accounts/update", {
