@@ -2,6 +2,8 @@ name: Publish Docker Image My
 
 on:
   push:
+    branches:
+      - "main-my"
     tags:
       - "v*"
   workflow_dispatch:
