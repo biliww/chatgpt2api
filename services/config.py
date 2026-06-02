@@ -35,6 +35,8 @@ DEFAULT_IMAGE_STORAGE = {
     "webdav_password": "",
     "webdav_root_path": "chatgpt2api/images",
     "public_base_url": "",
+    "imgbb_key": "",
+    "imgbb_expiration": 0,
 }
 
 DEFAULT_CHAT_COMPLETION_CACHE = {
@@ -109,7 +111,7 @@ def _normalize_backup_state(value: object) -> dict[str, object]:
 def _normalize_image_storage_settings(value: object) -> dict[str, object]:
     source = value if isinstance(value, dict) else {}
     mode = str(source.get("mode") or "local").strip().lower()
-    if mode not in {"local", "webdav", "both"}:
+    if mode not in {"local", "webdav", "both", "imgbb"}:
         mode = "local"
     enabled = _normalize_bool(source.get("enabled"), False)
     if not enabled:
@@ -123,6 +125,8 @@ def _normalize_image_storage_settings(value: object) -> dict[str, object]:
         "webdav_password": str(source.get("webdav_password") or "").strip(),
         "webdav_root_path": root_path or str(DEFAULT_IMAGE_STORAGE["webdav_root_path"]),
         "public_base_url": str(source.get("public_base_url") or "").strip().rstrip("/"),
+        "imgbb_key": str(source.get("imgbb_key") or "").strip(),
+        "imgbb_expiration": _normalize_positive_int(source.get("imgbb_expiration"), 0, 0),
     }
 
 
@@ -166,10 +170,18 @@ def _normalize_chat_completion_cache_settings(value: object) -> dict[str, object
 def _validate_image_storage_settings(settings: dict[str, object]) -> None:
     if not _normalize_bool(settings.get("enabled"), False):
         return
-    if not str(settings.get("webdav_url") or "").strip():
-        raise ValueError("启用 WebDAV 图片存储后必须填写 WebDAV URL")
-    if not str(settings.get("webdav_password") or "").strip():
-        raise ValueError("启用 WebDAV 图片存储后必须填写 WebDAV 密码")
+    mode = str(settings.get("mode") or "local").strip().lower()
+    if mode in {"webdav", "both"}:
+        if not str(settings.get("webdav_url") or "").strip():
+            raise ValueError("启用 WebDAV 图片存储后必须填写 WebDAV URL")
+        if not str(settings.get("webdav_password") or "").strip():
+            raise ValueError("启用 WebDAV 图片存储后必须填写 WebDAV 密码")
+    if mode == "imgbb":
+        if not str(settings.get("imgbb_key") or "").strip():
+            raise ValueError("启用 imgbb 图片存储后必须填写 imgbb API Key")
+        expiration = int(settings.get("imgbb_expiration") or 0)
+        if expiration and not 60 <= expiration <= 15552000:
+            raise ValueError("imgbb 过期时间必须为 60-15552000 秒，或填 0 表示不过期")
 
 
 @dataclass(frozen=True)

@@ -4,7 +4,7 @@ export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = string;
 export type AuthRole = "admin" | "user";
-export type ImageStorageMode = "local" | "webdav" | "both";
+export type ImageStorageMode = "local" | "webdav" | "both" | "imgbb";
 
 export type ImageStorageSettings = {
   enabled: boolean;
@@ -14,6 +14,8 @@ export type ImageStorageSettings = {
   webdav_password: string;
   webdav_root_path: string;
   public_base_url: string;
+  imgbb_key: string;
+  imgbb_expiration: number | string;
 };
 
 export type Account = {

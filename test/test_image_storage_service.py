@@ -41,6 +41,29 @@ class FakeWebDAVClient:
         return {"ok": True, "status": 200, "error": None}
 
 
+class FakeImgbbStorageClient:
+    uploaded: dict[str, bytes] = {}
+    tested = False
+
+    def __init__(self, _settings):
+        pass
+
+    def upload(self, image_data: bytes, *, name: str = "", expiration: int | None = None) -> dict[str, object]:
+        self.uploaded[name] = image_data
+        return {
+            "url": f"https://i.ibb.co/fake/{name}.png",
+            "display_url": f"https://i.ibb.co/display/{name}.png",
+            "url_viewer": f"https://ibb.co/{name}",
+            "delete_url": f"https://ibb.co/{name}/delete-token",
+            "id": name,
+            "size": len(image_data),
+        }
+
+    def test(self) -> dict[str, object]:
+        self.__class__.tested = True
+        return {"ok": True, "status": 200, "error": None, "url": "https://i.ibb.co/fake/test.png"}
+
+
 class ImageStorageServiceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -55,6 +78,8 @@ class ImageStorageServiceTests(unittest.TestCase):
             "webdav_password": "",
             "webdav_root_path": "chatgpt2api/images",
             "public_base_url": "",
+            "imgbb_key": "",
+            "imgbb_expiration": 0,
         }
         self.config_patcher = mock.patch("services.image_storage_service.config")
         self.mock_config = self.config_patcher.start()
@@ -65,6 +90,8 @@ class ImageStorageServiceTests(unittest.TestCase):
         self.mock_config.get_image_storage_settings.side_effect = lambda: dict(self.settings)
         FakeWebDAVClient.uploaded = {}
         FakeWebDAVClient.deleted = []
+        FakeImgbbStorageClient.uploaded = {}
+        FakeImgbbStorageClient.tested = False
 
     def service(self) -> ImageStorageService:
         return ImageStorageService(self.data_dir / "image_index.json")
@@ -133,6 +160,35 @@ class ImageStorageServiceTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertIn(".chatgpt2api_webdav_test.txt", FakeWebDAVClient.deleted)
+
+    def test_imgbb_mode_uploads_and_returns_remote_url(self):
+        self.settings.update({
+            "enabled": True,
+            "mode": "imgbb",
+            "imgbb_key": "fake-key",
+        })
+        with mock.patch("services.imgbb_storage_service.ImgbbStorageClient", FakeImgbbStorageClient):
+            stored = self.service().save(png_bytes(), "http://app.test")
+            items = self.service().list_items("http://app.test")
+
+        self.assertEqual(stored.storage, "imgbb")
+        self.assertTrue(stored.url.startswith("https://i.ibb.co/fake/"))
+        self.assertFalse((self.images_dir / stored.rel).exists())
+        self.assertTrue(self.service().exists(stored.rel))
+        self.assertEqual(items[0]["storage"], "imgbb")
+        self.assertEqual(items[0]["url"], stored.url)
+
+    def test_test_webdav_dispatches_to_imgbb_when_mode_is_imgbb(self):
+        self.settings.update({
+            "enabled": True,
+            "mode": "imgbb",
+            "imgbb_key": "fake-key",
+        })
+        with mock.patch("services.imgbb_storage_service.ImgbbStorageClient", FakeImgbbStorageClient):
+            result = self.service().test_webdav()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(FakeImgbbStorageClient.tested)
 
 
 if __name__ == "__main__":

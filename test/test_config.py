@@ -58,6 +58,40 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_normalize_image_storage_accepts_imgbb_mode(self) -> None:
+        module = self.config_module
+
+        settings = module._normalize_image_storage_settings({
+            "enabled": True,
+            "mode": "imgbb",
+            "imgbb_key": "test-key",
+            "imgbb_expiration": "600",
+        })
+
+        self.assertTrue(settings["enabled"])
+        self.assertEqual(settings["mode"], "imgbb")
+        self.assertEqual(settings["imgbb_key"], "test-key")
+        self.assertEqual(settings["imgbb_expiration"], 600)
+
+    def test_validate_image_storage_requires_imgbb_key(self) -> None:
+        module = self.config_module
+        settings = module._normalize_image_storage_settings({"enabled": True, "mode": "imgbb"})
+
+        with self.assertRaises(ValueError):
+            module._validate_image_storage_settings(settings)
+
+    def test_validate_image_storage_rejects_invalid_imgbb_expiration(self) -> None:
+        module = self.config_module
+        settings = module._normalize_image_storage_settings({
+            "enabled": True,
+            "mode": "imgbb",
+            "imgbb_key": "test-key",
+            "imgbb_expiration": 10,
+        })
+
+        with self.assertRaises(ValueError):
+            module._validate_image_storage_settings(settings)
+
 
 if __name__ == "__main__":
     unittest.main()

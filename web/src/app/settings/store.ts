@@ -49,12 +49,16 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       webdav_password: "",
       webdav_root_path: "chatgpt2api/images",
       public_base_url: "",
+      imgbb_key: "",
+      imgbb_expiration: 0,
     };
   const imageStorageMode: ImageStorageMode = imageStorage.enabled && imageStorage.mode === "both"
     ? "both"
     : imageStorage.enabled && imageStorage.mode === "webdav"
       ? "webdav"
-      : "local";
+      : imageStorage.enabled && imageStorage.mode === "imgbb"
+        ? "imgbb"
+        : "local";
   const backup = typeof config.backup === "object" && config.backup
     ? config.backup as BackupSettings
     : {
@@ -109,6 +113,8 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       webdav_password: String(imageStorage.webdav_password || ""),
       webdav_root_path: String(imageStorage.webdav_root_path || "chatgpt2api/images"),
       public_base_url: String(imageStorage.public_base_url || ""),
+      imgbb_key: String(imageStorage.imgbb_key || ""),
+      imgbb_expiration: imageStorage.imgbb_expiration ?? 0,
     },
     backup: {
       ...backup,
@@ -355,12 +361,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         },
         image_storage: {
           enabled: Boolean(config.image_storage?.enabled),
-          mode: config.image_storage?.enabled && ["webdav", "both"].includes(String(config.image_storage?.mode)) ? config.image_storage.mode : "local",
+          mode: config.image_storage?.enabled && ["webdav", "both", "imgbb"].includes(String(config.image_storage?.mode)) ? config.image_storage.mode : "local",
           webdav_url: String(config.image_storage?.webdav_url || "").trim(),
           webdav_username: String(config.image_storage?.webdav_username || "").trim(),
           webdav_password: String(config.image_storage?.webdav_password || "").trim(),
           webdav_root_path: String(config.image_storage?.webdav_root_path || "chatgpt2api/images").trim(),
           public_base_url: String(config.image_storage?.public_base_url || "").trim(),
+          imgbb_key: String(config.image_storage?.imgbb_key || "").trim(),
+          imgbb_expiration: Math.max(0, Number(config.image_storage?.imgbb_expiration) || 0),
         },
         backup: {
           ...(config.backup as BackupSettings),

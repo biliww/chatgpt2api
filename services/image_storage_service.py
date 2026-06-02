@@ -206,8 +206,11 @@ class ImageStorageService:
         config.cleanup_old_images()
         rel = self.make_relative_path(image_data)
         mode = self.mode()
-        if mode not in {"local", "webdav", "both"}:
+        if mode not in {"local", "webdav", "both", "imgbb"}:
             mode = "local"
+        if mode == "imgbb":
+            return self._save_imgbb(rel, image_data)
+
         stored_local = False
         stored_webdav = False
         remote_url = ""
@@ -243,6 +246,39 @@ class ImageStorageService:
             self._save_index(items)
         return StoredImage(rel=rel, url=self._public_url(rel, base_url), storage=str(item["storage"]), size=len(image_data))
 
+    def _save_imgbb(self, rel: str, image_data: bytes) -> StoredImage:
+        """上传图片到 imgbb 图床，记录索引并返回 imgbb 图片直链。"""
+        from services.imgbb_storage_service import ImgbbStorageClient
+
+        result = ImgbbStorageClient(self.settings()).upload(image_data, name=Path(rel).stem)
+        remote_url = str(result.get("url") or "").strip()
+        dimensions = _image_dimensions(image_data)
+        item = {
+            "rel": rel,
+            "path": rel,
+            "name": Path(rel).name,
+            "date": "-".join(rel.split("/")[:3]),
+            "size": len(image_data),
+            "created_at": _now_iso(),
+            "storage": "imgbb",
+            "local": False,
+            "webdav": False,
+            "imgbb": True,
+            "remote_url": remote_url,
+            "imgbb_url": remote_url,
+            "imgbb_display_url": str(result.get("display_url") or ""),
+            "imgbb_viewer_url": str(result.get("url_viewer") or ""),
+            "imgbb_delete_url": str(result.get("delete_url") or ""),
+            "imgbb_id": str(result.get("id") or ""),
+        }
+        if dimensions:
+            item["width"], item["height"] = dimensions
+        with self._index_lock:
+            items = self._load_clean_index()
+            items[rel] = item
+            self._save_index(items)
+        return StoredImage(rel=rel, url=remote_url, storage="imgbb", size=len(image_data))
+
     def get_bytes(self, rel: str) -> bytes:
         safe_rel = _safe_relative_path(rel)
         if not _is_image_rel(safe_rel):
@@ -253,6 +289,17 @@ class ImageStorageService:
         item = self._load_clean_index().get(safe_rel, {})
         if item.get("webdav"):
             return WebDAVClient(self.settings()).get(safe_rel)
+        if item.get("imgbb"):
+            url = _clean(item.get("imgbb_url") or item.get("remote_url"))
+            if not url:
+                raise HTTPException(status_code=404, detail="image not found")
+            try:
+                response = requests.get(url, timeout=60)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail="image not found") from exc
+            if response.status_code >= 400 or not response.content:
+                raise HTTPException(status_code=404, detail="image not found")
+            return bytes(response.content)
         raise HTTPException(status_code=404, detail="image not found")
 
     def exists(self, rel: str) -> bool:
@@ -262,7 +309,7 @@ class ImageStorageService:
         if _local_image_path(safe_rel).is_file():
             return True
         item = self._load_clean_index().get(safe_rel, {})
-        return bool(item.get("webdav"))
+        return bool(item.get("webdav") or item.get("imgbb"))
 
     def has_local(self, rel: str) -> bool:
         safe_rel = _safe_relative_path(rel)
@@ -306,16 +353,18 @@ class ImageStorageService:
                     continue
                 local = _local_image_path(rel).is_file()
                 webdav = bool(item.get("webdav"))
-                if not local and not webdav:
+                imgbb = bool(item.get("imgbb"))
+                if not local and not webdav and not imgbb:
                     indexed.pop(rel, None)
                     changed = True
                     continue
-                storage = "both" if local and webdav else ("webdav" if webdav else "local")
-                if item.get("local") != local or item.get("storage") != storage:
+                storage = "both" if local and webdav else ("imgbb" if imgbb else ("webdav" if webdav else "local"))
+                if item.get("local") != local or item.get("storage") != storage or item.get("imgbb") != imgbb:
                     item = {
                         **item,
                         "local": local,
                         "storage": storage,
+                        "imgbb": imgbb,
                     }
                     indexed[rel] = item
                     changed = True
@@ -328,7 +377,7 @@ class ImageStorageService:
                     **item,
                     "rel": rel,
                     "path": rel,
-                    "url": self._public_url(rel, base_url),
+                    "url": str(item.get("imgbb_url") or item.get("remote_url")) if storage == "imgbb" else self._public_url(rel, base_url),
                 })
             if changed:
                 self._save_index(indexed)
@@ -399,6 +448,10 @@ class ImageStorageService:
         return {"uploaded": uploaded, "skipped": skipped, "failed": failed}
 
     def test_webdav(self) -> dict[str, object]:
+        if self.mode() == "imgbb":
+            from services.imgbb_storage_service import ImgbbStorageClient
+
+            return ImgbbStorageClient(self.settings()).test()
         return WebDAVClient(self.settings()).test()
 
 

@@ -227,7 +227,7 @@ export function ConfigCard() {
                   checked={Boolean(config?.image_storage?.enabled)}
                   onCheckedChange={(checked) => setImageStorageField("enabled", Boolean(checked))}
                 />
-                启用 WebDAV 图片存储
+                启用图片外部存储
               </label>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -238,17 +238,17 @@ export function ConfigCard() {
                   disabled={isTestingImageStorage || !config?.image_storage?.enabled}
                 >
                   {isTestingImageStorage ? <LoaderCircle className="size-4 animate-spin" /> : <Cloud className="size-4" />}
-                  测试 WebDAV
+                  测试存储
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
                   className="h-9 rounded-xl border-stone-200 bg-white px-4 text-stone-700"
                   onClick={() => void syncImagesToWebDAV()}
-                  disabled={isSyncingImageStorage || !config?.image_storage?.enabled || config?.image_storage?.mode === "local"}
+                  disabled={isSyncingImageStorage || !config?.image_storage?.enabled || ["local", "imgbb"].includes(String(config?.image_storage?.mode || "local"))}
                 >
                   {isSyncingImageStorage ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                  全量同步
+                  同步 WebDAV
                 </Button>
               </div>
             </div>
@@ -263,7 +263,9 @@ export function ConfigCard() {
                     ? "本机 + WebDAV"
                     : config.image_storage.mode === "webdav"
                       ? "仅 WebDAV"
-                      : "仅本机"
+                      : config.image_storage.mode === "imgbb"
+                        ? "仅 imgbb"
+                        : "仅本机"
                   : "仅本机"}
               </span>
               <span className="ml-2 text-stone-400">修改后需要点保存，或通过测试/同步按钮自动保存。</span>
@@ -283,6 +285,7 @@ export function ConfigCard() {
                     <SelectItem value="local">仅本机</SelectItem>
                     <SelectItem value="webdav">仅 WebDAV</SelectItem>
                     <SelectItem value="both">本机 + WebDAV</SelectItem>
+                    <SelectItem value="imgbb">仅 imgbb</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -293,7 +296,7 @@ export function ConfigCard() {
                   onChange={(event) => setImageStorageField("webdav_url", event.target.value)}
                   placeholder="https://example.com/dav"
                   className="h-10 rounded-xl border-stone-200 bg-white"
-                  disabled={!config?.image_storage?.enabled}
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode === "imgbb"}
                 />
               </div>
               <div className="space-y-2">
@@ -302,7 +305,7 @@ export function ConfigCard() {
                   value={String(config?.image_storage?.webdav_username || "")}
                   onChange={(event) => setImageStorageField("webdav_username", event.target.value)}
                   className="h-10 rounded-xl border-stone-200 bg-white"
-                  disabled={!config?.image_storage?.enabled}
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode === "imgbb"}
                 />
               </div>
               <div className="space-y-2">
@@ -312,7 +315,7 @@ export function ConfigCard() {
                   value={String(config?.image_storage?.webdav_password || "")}
                   onChange={(event) => setImageStorageField("webdav_password", event.target.value)}
                   className="h-10 rounded-xl border-stone-200 bg-white"
-                  disabled={!config?.image_storage?.enabled}
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode === "imgbb"}
                 />
               </div>
               <div className="space-y-2">
@@ -322,7 +325,7 @@ export function ConfigCard() {
                   onChange={(event) => setImageStorageField("webdav_root_path", event.target.value)}
                   placeholder="chatgpt2api/images"
                   className="h-10 rounded-xl border-stone-200 bg-white"
-                  disabled={!config?.image_storage?.enabled}
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode === "imgbb"}
                 />
               </div>
               <div className="space-y-2 md:col-span-3">
@@ -332,9 +335,31 @@ export function ConfigCard() {
                   onChange={(event) => setImageStorageField("public_base_url", event.target.value)}
                   placeholder="https://cdn.example.com/chatgpt2api/images"
                   className="h-10 rounded-xl border-stone-200 bg-white"
-                  disabled={!config?.image_storage?.enabled}
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode === "imgbb"}
                 />
                 <p className="text-xs text-stone-500">留空时返回本应用 /images/... 代理地址；填入后直接返回公开图片地址。</p>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-sm text-stone-700">imgbb API Key</label>
+                <Input
+                  type="password"
+                  value={String(config?.image_storage?.imgbb_key || "")}
+                  onChange={(event) => setImageStorageField("imgbb_key", event.target.value)}
+                  className="h-10 rounded-xl border-stone-200 bg-white"
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode !== "imgbb"}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm text-stone-700">imgbb 过期秒数</label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={String(config?.image_storage?.imgbb_expiration || "")}
+                  onChange={(event) => setImageStorageField("imgbb_expiration", event.target.value)}
+                  placeholder="0"
+                  className="h-10 rounded-xl border-stone-200 bg-white"
+                  disabled={!config?.image_storage?.enabled || config?.image_storage?.mode !== "imgbb"}
+                />
               </div>
             </div>
           </div>
