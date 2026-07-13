@@ -26,8 +26,13 @@ export function ConfigCard() {
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setImagePollTimeoutSecs = useSettingsStore((state) => state.setImagePollTimeoutSecs);
   const setImageAccountConcurrency = useSettingsStore((state) => state.setImageAccountConcurrency);
+  const setImageSettleEnabled = useSettingsStore((state) => state.setImageSettleEnabled);
+  const setImageRemoveConversationAfterResult = useSettingsStore((state) => state.setImageRemoveConversationAfterResult);
+  const setImageSettleSecs = useSettingsStore((state) => state.setImageSettleSecs);
+  const setImageTimeoutRetrySecs = useSettingsStore((state) => state.setImageTimeoutRetrySecs);
   const setAutoRemoveInvalidAccounts = useSettingsStore((state) => state.setAutoRemoveInvalidAccounts);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
+  const setAutoReloginAfterRefresh = useSettingsStore((state) => state.setAutoReloginAfterRefresh);
   const setLogLevel = useSettingsStore((state) => state.setLogLevel);
   const setProxy = useSettingsStore((state) => state.setProxy);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
@@ -102,7 +107,9 @@ export function ConfigCard() {
               placeholder="http://127.0.0.1:7890"
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
-            <p className="text-xs text-stone-500">留空表示不使用代理。</p>
+            <p className="text-xs leading-5 text-stone-500">
+              留空表示不使用代理。支持协议://账号:密码@主机:端口，也可直接粘贴代理商的 主机:端口:账号:密码；示例 http://user:pass@127.0.0.1:7890、127.0.0.1:7890:user:pass。账号密码含 @/: 等特殊字符时需 URL 编码。
+            </p>
             {proxyTestResult ? (
               <div
                 className={`rounded-xl border px-3 py-2 text-xs leading-6 ${
@@ -169,13 +176,70 @@ export function ConfigCard() {
             />
             <p className="text-xs text-stone-500">限制每个账号同时处理的图片请求数量，默认 3。</p>
           </div>
-          <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
-            <Checkbox
-              checked={Boolean(config?.auto_remove_invalid_accounts)}
-              onCheckedChange={(checked) => setAutoRemoveInvalidAccounts(Boolean(checked))}
+          <div className="space-y-2">
+            <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
+              <Checkbox
+                checked={Boolean(config?.auto_remove_invalid_accounts)}
+                onCheckedChange={(checked) => setAutoRemoveInvalidAccounts(Boolean(checked))}
+              />
+              自动移除异常账号
+            </label>
+            <p className="text-xs text-stone-500">刷新时检测并移除</p>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
+              <Checkbox
+                checked={Boolean(config?.image_settle_enabled !== false)}
+                onCheckedChange={(checked) => setImageSettleEnabled(Boolean(checked))}
+              />
+              <span className="text-sm text-stone-700">图片二次确认机制</span>
+            </div>
+            <p className="text-xs text-stone-500">打开后能稍微提升获取图片的成功率。</p>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
+              <Checkbox
+                checked={Boolean(config?.image_remove_conversation_after_result)}
+                onCheckedChange={(checked) => setImageRemoveConversationAfterResult(Boolean(checked))}
+              />
+              <span className="text-sm text-stone-700">出图后移除本地对话</span>
+            </div>
+            <p className="text-xs text-stone-500">成功拿到图片后，异步隐藏 ChatGPT 侧对应的本地对话记录。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">图片超时继续等待时间</label>
+            <Input
+              value={String(config?.image_timeout_retry_secs || "30")}
+              onChange={(event) => setImageTimeoutRetrySecs(event.target.value)}
+              placeholder="30"
+              className="h-10 rounded-xl border-stone-200 bg-white"
             />
-            自动移除异常账号
-          </label>
+            <p className="text-xs text-stone-500">单位秒，超时后点击"继续等待"额外等待的时间。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">图片二次确认等待时间</label>
+            <Input
+              value={String(config?.image_settle_secs || "2.0")}
+              onChange={(event) => setImageSettleSecs(event.target.value)}
+              placeholder="2.0"
+              className="h-10 rounded-xl border-stone-200 bg-white disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!config?.image_settle_enabled}
+            />
+            <p className="text-xs text-stone-500">单位秒，找到图片后等待多久再次确认。需配合图片二次确认机制使用。</p>
+          </div>
+          <div className="flex gap-4 md:col-span-2">
+            <div className="flex-1 space-y-2">
+              <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
+                <Checkbox
+                  checked={Boolean(config?.auto_relogin_after_refresh)}
+                  onCheckedChange={(checked) => setAutoReloginAfterRefresh(Boolean(checked))}
+                />
+                刷新后自动尝试移除异常状态
+              </label>
+              <p className="text-xs text-stone-500">开启后刷新时自动尝试密码登录恢复账号。</p>
+            </div>
+            <div className="flex-1" aria-hidden="true" />
+          </div>
           <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
             <Checkbox
               checked={Boolean(config?.auto_remove_rate_limited_accounts)}

@@ -10,18 +10,13 @@ import {
   fetchCPAPoolFiles,
   fetchCPAPools,
   fetchBackups,
-  fetchRegisterConfig,
-  resetRegister as resetRegisterApi,
   fetchSettingsConfig,
   runBackupNow,
   syncImageStorage,
-  startRegister,
   startCPAImport,
-  stopRegister,
   testBackupConnection,
   testImageStorageConnection,
   updateCPAPool,
-  updateRegisterConfig,
   updateSettingsConfig,
   type BackupItem,
   type BackupSettings,
@@ -30,13 +25,101 @@ import {
   type CPARemoteFile,
   type ImageStorageMode,
   type ImageStorageSettings,
-  type RegisterConfig,
+  type ProxyRuntimeClearanceMode,
+  type ProxyRuntimeEgressMode,
+  type ProxyRuntimeSettings,
   type SettingsConfig,
+  type ThirdPartyAppsSettings,
 } from "@/lib/api";
 
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
 
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
+
+const DEFAULT_PROXY_RUNTIME: ProxyRuntimeSettings = {
+  enabled: false,
+  egress_mode: "direct",
+  proxy_url: "",
+  resource_proxy_url: "",
+  skip_ssl_verify: false,
+  reset_session_status_codes: [403],
+  clearance: {
+    enabled: false,
+    mode: "none",
+    cf_cookies: "",
+    cf_clearance: "",
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    browser: "chrome",
+    flaresolverr_url: "",
+    timeout_sec: 60,
+    refresh_interval: 3600,
+    warm_up_on_start: false,
+    has_cf_cookies: false,
+    has_cf_clearance: false,
+  },
+};
+
+const DEFAULT_THIRD_PARTY_APPS: ThirdPartyAppsSettings = {
+  infinite_canvas: {
+    enabled: false,
+    url: "https://canvas.best",
+  },
+};
+
+function normalizeProxyRuntime(value: unknown): ProxyRuntimeSettings {
+  const source = typeof value === "object" && value !== null ? value as Partial<ProxyRuntimeSettings> : {};
+  const clearanceSource = typeof source.clearance === "object" && source.clearance !== null
+    ? source.clearance as Partial<ProxyRuntimeSettings["clearance"]>
+    : {};
+  const egressMode = source.egress_mode === "single_proxy" ? "single_proxy" : "direct";
+  const clearanceMode: ProxyRuntimeClearanceMode = clearanceSource.mode === "manual" || clearanceSource.mode === "flaresolverr"
+    ? clearanceSource.mode
+    : "none";
+  const statusCodes = Array.isArray(source.reset_session_status_codes)
+    ? source.reset_session_status_codes
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item >= 100 && item <= 599)
+    : [];
+  return {
+    ...DEFAULT_PROXY_RUNTIME,
+    ...source,
+    enabled: Boolean(source.enabled),
+    egress_mode: egressMode as ProxyRuntimeEgressMode,
+    proxy_url: String(source.proxy_url || ""),
+    resource_proxy_url: String(source.resource_proxy_url || ""),
+    skip_ssl_verify: Boolean(source.skip_ssl_verify),
+    reset_session_status_codes: statusCodes.length > 0 ? statusCodes : [403],
+    clearance: {
+      ...DEFAULT_PROXY_RUNTIME.clearance,
+      ...clearanceSource,
+      enabled: Boolean(clearanceSource.enabled),
+      mode: clearanceMode,
+      cf_cookies: String(clearanceSource.cf_cookies || ""),
+      cf_clearance: String(clearanceSource.cf_clearance || ""),
+      user_agent: String(clearanceSource.user_agent || DEFAULT_PROXY_RUNTIME.clearance.user_agent),
+      browser: String(clearanceSource.browser || "chrome"),
+      flaresolverr_url: String(clearanceSource.flaresolverr_url || ""),
+      timeout_sec: Number(clearanceSource.timeout_sec || 60),
+      refresh_interval: Number(clearanceSource.refresh_interval || 3600),
+      warm_up_on_start: Boolean(clearanceSource.warm_up_on_start),
+      has_cf_cookies: Boolean(clearanceSource.has_cf_cookies),
+      has_cf_clearance: Boolean(clearanceSource.has_cf_clearance),
+    },
+  };
+}
+
+function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
+  const source = typeof value === "object" && value !== null ? value as Partial<ThirdPartyAppsSettings> : {};
+  const canvas: Partial<ThirdPartyAppsSettings["infinite_canvas"]> = typeof source.infinite_canvas === "object" && source.infinite_canvas
+    ? source.infinite_canvas
+    : {};
+  return {
+    infinite_canvas: {
+      enabled: Boolean(canvas.enabled),
+      url: String(canvas.url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url),
+    },
+  };
+}
 
 function normalizeConfig(config: SettingsConfig): SettingsConfig {
   const imageStorage = typeof config.image_storage === "object" && config.image_storage
@@ -75,7 +158,6 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       passphrase: "",
       include: {
         config: true,
-        register: true,
         cpa: true,
         sub2api: true,
         logs: true,
@@ -91,8 +173,14 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     image_retention_days: Number(config.image_retention_days || 30),
     image_poll_timeout_secs: Number(config.image_poll_timeout_secs || 120),
     image_account_concurrency: Number(config.image_account_concurrency || 3),
+    image_settle_enabled: Boolean(config.image_settle_enabled !== false),
+    image_check_before_hit_enabled: Boolean(config.image_check_before_hit_enabled !== false),
+    image_remove_conversation_after_result: Boolean(config.image_remove_conversation_after_result),
+    image_settle_secs: Number(config.image_settle_secs || 2.0),
+    image_timeout_retry_secs: Number(config.image_timeout_retry_secs || 30),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
     auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
+    auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
     log_levels: Array.isArray(config.log_levels) ? config.log_levels : [],
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
@@ -116,6 +204,8 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       imgbb_key: String(imageStorage.imgbb_key || ""),
       imgbb_expiration: imageStorage.imgbb_expiration ?? 0,
     },
+    proxy_runtime: normalizeProxyRuntime(config.proxy_runtime),
+    third_party_apps: normalizeThirdPartyApps(config.third_party_apps),
     backup: {
       ...backup,
       enabled: Boolean(backup.enabled),
@@ -130,7 +220,6 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       passphrase: String(backup.passphrase || ""),
       include: {
         config: Boolean(backup.include?.config ?? true),
-        register: Boolean(backup.include?.register ?? true),
         cpa: Boolean(backup.include?.cpa ?? true),
         sub2api: Boolean(backup.include?.sub2api ?? true),
         logs: Boolean(backup.include?.logs ?? true),
@@ -173,10 +262,6 @@ type SettingsStore = {
   isTestingImageStorage: boolean;
   isSyncingImageStorage: boolean;
 
-  registerConfig: RegisterConfig | null;
-  isLoadingRegister: boolean;
-  isSavingRegister: boolean;
-
   pools: CPAPool[];
   isLoadingPools: boolean;
   deletingId: string | null;
@@ -210,8 +295,14 @@ type SettingsStore = {
   setImageRetentionDays: (value: string) => void;
   setImagePollTimeoutSecs: (value: string) => void;
   setImageAccountConcurrency: (value: string) => void;
+  setImageSettleEnabled: (value: boolean) => void;
+  setImageCheckBeforeHitEnabled: (value: boolean) => void;
+  setImageRemoveConversationAfterResult: (value: boolean) => void;
+  setImageSettleSecs: (value: string) => void;
+  setImageTimeoutRetrySecs: (value: string) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
   setAutoRemoveRateLimitedAccounts: (value: boolean) => void;
+  setAutoReloginAfterRefresh: (value: boolean) => void;
   setLogLevel: (level: string, enabled: boolean) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
@@ -219,27 +310,14 @@ type SettingsStore = {
   setSensitiveWordsText: (value: string) => void;
   setAIReviewField: (key: "enabled" | "base_url" | "api_key" | "model" | "prompt", value: string | boolean) => void;
   setImageStorageField: (key: keyof ImageStorageSettings, value: string | boolean) => void;
+  setProxyRuntimeField: <K extends keyof ProxyRuntimeSettings>(key: K, value: ProxyRuntimeSettings[K]) => void;
+  setProxyRuntimeClearanceField: <K extends keyof ProxyRuntimeSettings["clearance"]>(key: K, value: ProxyRuntimeSettings["clearance"][K]) => void;
+  setProxyRuntimeStatusCodesText: (value: string) => void;
+  setInfiniteCanvasField: <K extends keyof ThirdPartyAppsSettings["infinite_canvas"]>(key: K, value: ThirdPartyAppsSettings["infinite_canvas"][K]) => void;
   testImageStorage: () => Promise<void>;
   syncImagesToWebDAV: () => Promise<void>;
   setBackupField: (key: keyof BackupSettings, value: string | boolean) => void;
   setBackupInclude: (key: keyof BackupSettings["include"], value: boolean) => void;
-
-  loadRegister: (silent?: boolean) => Promise<void>;
-  setRegisterConfig: (config: RegisterConfig) => void;
-  setRegisterProxy: (value: string) => void;
-  setRegisterTotal: (value: string) => void;
-  setRegisterThreads: (value: string) => void;
-  setRegisterMode: (value: "total" | "quota" | "available") => void;
-  setRegisterTargetQuota: (value: string) => void;
-  setRegisterTargetAvailable: (value: string) => void;
-  setRegisterCheckInterval: (value: string) => void;
-  setRegisterMailField: (key: "request_timeout" | "wait_timeout" | "wait_interval", value: string) => void;
-  addRegisterProvider: () => void;
-  updateRegisterProvider: (index: number, updates: Record<string, unknown>) => void;
-  deleteRegisterProvider: (index: number) => void;
-  saveRegister: () => Promise<void>;
-  toggleRegister: () => Promise<void>;
-  resetRegister: () => Promise<void>;
 
   loadPools: (silent?: boolean) => Promise<void>;
   openAddDialog: () => void;
@@ -274,10 +352,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   isTestingBackup: false,
   isTestingImageStorage: false,
   isSyncingImageStorage: false,
-
-  registerConfig: null,
-  isLoadingRegister: true,
-  isSavingRegister: false,
 
   pools: [],
   isLoadingPools: true,
@@ -346,8 +420,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
         image_poll_timeout_secs: Math.max(1, Number(config.image_poll_timeout_secs) || 120),
         image_account_concurrency: Math.max(1, Number(config.image_account_concurrency) || 3),
+        image_settle_enabled: Boolean(config.image_settle_enabled !== false),
+        image_check_before_hit_enabled: Boolean(config.image_check_before_hit_enabled !== false),
+        image_remove_conversation_after_result: Boolean(config.image_remove_conversation_after_result),
+        image_settle_secs: Math.max(0.5, Number(config.image_settle_secs) || 2.0),
+        image_timeout_retry_secs: Math.max(1, Number(config.image_timeout_retry_secs) || 30),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
         auto_remove_rate_limited_accounts: Boolean(config.auto_remove_rate_limited_accounts),
+        auto_relogin_after_refresh: Boolean(config.auto_relogin_after_refresh),
         proxy: config.proxy.trim(),
         base_url: String(config.base_url || "").trim(),
         global_system_prompt: String(config.global_system_prompt || "").trim(),
@@ -370,6 +450,32 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           imgbb_key: String(config.image_storage?.imgbb_key || "").trim(),
           imgbb_expiration: Math.max(0, Number(config.image_storage?.imgbb_expiration) || 0),
         },
+        proxy_runtime: {
+          ...normalizeProxyRuntime(config.proxy_runtime),
+          proxy_url: String(config.proxy_runtime?.proxy_url || "").trim(),
+          resource_proxy_url: String(config.proxy_runtime?.resource_proxy_url || "").trim(),
+          reset_session_status_codes: normalizeProxyRuntime({
+            reset_session_status_codes: (config.proxy_runtime?.reset_session_status_codes || [403])
+              .map((item) => Number(item))
+              .filter((item) => Number.isInteger(item) && item >= 100 && item <= 599),
+          }).reset_session_status_codes,
+          clearance: {
+            ...normalizeProxyRuntime(config.proxy_runtime).clearance,
+            cf_cookies: String(config.proxy_runtime?.clearance?.cf_cookies || "").trim(),
+            cf_clearance: String(config.proxy_runtime?.clearance?.cf_clearance || "").trim(),
+            user_agent: String(config.proxy_runtime?.clearance?.user_agent || DEFAULT_PROXY_RUNTIME.clearance.user_agent).trim(),
+            browser: String(config.proxy_runtime?.clearance?.browser || "chrome").trim(),
+            flaresolverr_url: String(config.proxy_runtime?.clearance?.flaresolverr_url || "").trim(),
+            timeout_sec: Math.max(1, Number(config.proxy_runtime?.clearance?.timeout_sec) || 60),
+            refresh_interval: Math.max(60, Number(config.proxy_runtime?.clearance?.refresh_interval) || 3600),
+          },
+        },
+        third_party_apps: {
+          infinite_canvas: {
+            enabled: Boolean(config.third_party_apps?.infinite_canvas?.enabled),
+            url: String(config.third_party_apps?.infinite_canvas?.url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url).trim(),
+          },
+        },
         backup: {
           ...(config.backup as BackupSettings),
           account_id: String(config.backup?.account_id || "").trim(),
@@ -385,6 +491,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       set({
         config: normalizeConfig(data.config),
       });
+      window.dispatchEvent(new Event("third-party-apps-updated"));
       toast.success("配置已保存");
       return true;
     } catch (error) {
@@ -421,12 +528,36 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set((state) => state.config ? { config: { ...state.config, image_account_concurrency: value } } : {});
   },
 
+  setImageSettleEnabled: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_settle_enabled: value, image_check_before_hit_enabled: value } } : {});
+  },
+
+  setImageCheckBeforeHitEnabled: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_check_before_hit_enabled: value } } : {});
+  },
+
+  setImageRemoveConversationAfterResult: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_remove_conversation_after_result: value } } : {});
+  },
+
+  setImageSettleSecs: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_settle_secs: value } } : {});
+  },
+
+  setImageTimeoutRetrySecs: (value) => {
+    set((state) => state.config ? { config: { ...state.config, image_timeout_retry_secs: value } } : {});
+  },
+
   setAutoRemoveInvalidAccounts: (value) => {
     set((state) => state.config ? { config: { ...state.config, auto_remove_invalid_accounts: value } } : {});
   },
 
   setAutoRemoveRateLimitedAccounts: (value) => {
     set((state) => state.config ? { config: { ...state.config, auto_remove_rate_limited_accounts: value } } : {});
+  },
+
+  setAutoReloginAfterRefresh: (value) => {
+    set((state) => state.config ? { config: { ...state.config, auto_relogin_after_refresh: value } } : {});
   },
 
   setLogLevel: (level, enabled) => {
@@ -498,6 +629,90 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: {
           ...state.config,
           image_storage: next,
+        },
+      };
+    });
+  },
+
+  setProxyRuntimeField: (key, value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const runtime = normalizeProxyRuntime(state.config.proxy_runtime);
+      const nextRuntime = normalizeProxyRuntime({
+        ...runtime,
+        [key]: value,
+      });
+      return {
+        config: {
+          ...state.config,
+          proxy_runtime: nextRuntime,
+        },
+      };
+    });
+  },
+
+  setProxyRuntimeClearanceField: (key, value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const runtime = normalizeProxyRuntime(state.config.proxy_runtime);
+      const nextRuntime = normalizeProxyRuntime({
+        ...runtime,
+        clearance: {
+          ...runtime.clearance,
+          [key]: value,
+        },
+      });
+      return {
+        config: {
+          ...state.config,
+          proxy_runtime: nextRuntime,
+        },
+      };
+    });
+  },
+
+  setProxyRuntimeStatusCodesText: (value) => {
+    const codes = value
+      .split(/[,\s]+/)
+      .map((item) => Number(item.trim()))
+      .filter((item) => Number.isInteger(item) && item >= 100 && item <= 599);
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const runtime = normalizeProxyRuntime(state.config.proxy_runtime);
+      return {
+        config: {
+          ...state.config,
+          proxy_runtime: normalizeProxyRuntime({
+            ...runtime,
+            reset_session_status_codes: codes.length > 0 ? codes : [403],
+          }),
+        },
+      };
+    });
+  },
+
+  setInfiniteCanvasField: (key, value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const apps = normalizeThirdPartyApps(state.config.third_party_apps);
+      return {
+        config: {
+          ...state.config,
+          third_party_apps: {
+            ...apps,
+            infinite_canvas: {
+              ...apps.infinite_canvas,
+              [key]: value,
+            },
+          },
         },
       };
     });
@@ -640,159 +855,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       toast.error(error instanceof Error ? error.message : "测试备份连接失败");
     } finally {
       set({ isTestingBackup: false });
-    }
-  },
-
-  loadRegister: async (silent = false) => {
-    if (!silent) set({ isLoadingRegister: true });
-    try {
-      const data = await fetchRegisterConfig();
-      set({ registerConfig: data.register });
-    } catch (error) {
-      if (!silent) toast.error(error instanceof Error ? error.message : "加载注册配置失败");
-    } finally {
-      if (!silent) set({ isLoadingRegister: false });
-    }
-  },
-
-  setRegisterConfig: (config) => {
-    set({ registerConfig: config, isLoadingRegister: false });
-  },
-
-  setRegisterProxy: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, proxy: value } } : {});
-  },
-
-  setRegisterTotal: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, total: Number(value) || 0 } } : {});
-  },
-
-  setRegisterThreads: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, threads: Number(value) || 0 } } : {});
-  },
-
-  setRegisterMode: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, mode: value } } : {});
-  },
-
-  setRegisterTargetQuota: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, target_quota: Number(value) || 0 } } : {});
-  },
-
-  setRegisterTargetAvailable: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, target_available: Number(value) || 0 } } : {});
-  },
-
-  setRegisterCheckInterval: (value) => {
-    set((state) => state.registerConfig ? { registerConfig: { ...state.registerConfig, check_interval: Number(value) || 0 } } : {});
-  },
-
-  setRegisterMailField: (key, value) => {
-    set((state) => state.registerConfig ? {
-      registerConfig: {
-        ...state.registerConfig,
-        mail: { ...state.registerConfig.mail, [key]: Number(value) || 0 },
-      },
-    } : {});
-  },
-
-  addRegisterProvider: () => {
-    set((state) => state.registerConfig ? {
-      registerConfig: {
-        ...state.registerConfig,
-        mail: {
-          ...state.registerConfig.mail,
-          providers: [
-            ...(state.registerConfig.mail.providers || []),
-            { enable: true, type: "cloudmail_gen", api_base: "", admin_email: "", admin_password: "", domain: [], subdomain: [], email_prefix: "" },
-          ],
-        },
-      },
-    } : {});
-  },
-
-  updateRegisterProvider: (index, updates) => {
-    set((state) => {
-      if (!state.registerConfig) return {};
-      const providers = [...(state.registerConfig.mail.providers || [])];
-      providers[index] = { ...(providers[index] || {}), ...updates };
-      return { registerConfig: { ...state.registerConfig, mail: { ...state.registerConfig.mail, providers } } };
-    });
-  },
-
-  deleteRegisterProvider: (index) => {
-    set((state) => state.registerConfig ? {
-      registerConfig: {
-        ...state.registerConfig,
-        mail: {
-          ...state.registerConfig.mail,
-          providers: (state.registerConfig.mail.providers || []).filter((_, itemIndex) => itemIndex !== index),
-        },
-      },
-    } : {});
-  },
-
-  saveRegister: async () => {
-    const { registerConfig } = get();
-    if (!registerConfig) return;
-    try {
-      set({ isSavingRegister: true });
-      const data = await updateRegisterConfig({
-        mail: registerConfig.mail,
-        proxy: registerConfig.proxy.trim(),
-        total: Math.max(1, Number(registerConfig.total) || 1),
-        threads: Math.max(1, Number(registerConfig.threads) || 1),
-        mode: registerConfig.mode,
-        target_quota: Math.max(1, Number(registerConfig.target_quota) || 1),
-        target_available: Math.max(1, Number(registerConfig.target_available) || 1),
-        check_interval: Math.max(1, Number(registerConfig.check_interval) || 5),
-      });
-      set({ registerConfig: data.register });
-      toast.success("注册配置已保存");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存注册配置失败");
-    } finally {
-      set({ isSavingRegister: false });
-    }
-  },
-
-  toggleRegister: async () => {
-    const { registerConfig } = get();
-    if (!registerConfig) return;
-    set({ isSavingRegister: true });
-    try {
-      if (!registerConfig.enabled) {
-        await updateRegisterConfig({
-          mail: registerConfig.mail,
-          proxy: registerConfig.proxy.trim(),
-          total: Math.max(1, Number(registerConfig.total) || 1),
-          threads: Math.max(1, Number(registerConfig.threads) || 1),
-          mode: registerConfig.mode,
-          target_quota: Math.max(1, Number(registerConfig.target_quota) || 1),
-          target_available: Math.max(1, Number(registerConfig.target_available) || 1),
-          check_interval: Math.max(1, Number(registerConfig.check_interval) || 5),
-        });
-      }
-      const data = registerConfig.enabled ? await stopRegister() : await startRegister();
-      set({ registerConfig: data.register });
-      toast.success(registerConfig.enabled ? "注册任务已停止" : "注册任务已启动");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "切换注册状态失败");
-    } finally {
-      set({ isSavingRegister: false });
-    }
-  },
-
-  resetRegister: async () => {
-    set({ isSavingRegister: true });
-    try {
-      const data = await resetRegisterApi();
-      set({ registerConfig: data.register });
-      toast.success("注册统计已重置");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "重置注册统计失败");
-    } finally {
-      set({ isSavingRegister: false });
     }
   },
 
