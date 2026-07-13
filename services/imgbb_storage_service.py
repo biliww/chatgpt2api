@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import random
 from typing import Any
 
 from curl_cffi import CurlMime, requests
@@ -21,14 +22,22 @@ class ImgbbStorageClient:
     """负责调用 imgbb 图床 API 上传图片，并解析返回的公开访问地址。"""
 
     def __init__(self, settings: dict[str, object]):
-        """初始化 imgbb 客户端，读取 API Key 和可选过期时间。"""
-        self.key = str(settings.get("imgbb_key") or "").strip()
+        """初始化 imgbb 客户端，读取 API Key（支持逗号分隔多个 Key，随机使用）和可选过期时间。"""
+        raw_keys = str(settings.get("imgbb_key") or "").strip()
+        self.keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+        self.key = self.keys[0] if self.keys else ""
         self.expiration = int(settings.get("imgbb_expiration") or 0)
         self.endpoint = IMGBB_UPLOAD_ENDPOINT
 
+    def _pick_key(self) -> str:
+        """从多个 Key 中随机选择一个；兼容单 Key 场景。"""
+        if not self.keys:
+            raise ImageStorageError("imgbb API Key is required")
+        return random.choice(self.keys)
+
     def upload(self, image_data: bytes, *, name: str = "", expiration: int | None = None) -> dict[str, object]:
-        """上传图片 bytes 到 imgbb，并返回标准化后的上传结果。"""
-        if not self.key:
+        """上传图片 bytes 到 imgbb，随机选择一个 API Key，并返回标准化后的上传结果。"""
+        if not self.keys:
             raise ImageStorageError("imgbb API Key is required")
         if not image_data:
             raise ImageStorageError("image data is empty")
@@ -39,7 +48,7 @@ class ImgbbStorageClient:
         if resolved_expiration and not IMGBB_MIN_EXPIRATION_SECONDS <= resolved_expiration <= IMGBB_MAX_EXPIRATION_SECONDS:
             raise ImageStorageError("imgbb expiration must be between 60 and 15552000 seconds")
         upload_name = name or hashlib.md5(image_data).hexdigest()
-        params: dict[str, object] = {"key": self.key}
+        params: dict[str, object] = {"key": self._pick_key()}
         if resolved_expiration:
             params["expiration"] = resolved_expiration
 
