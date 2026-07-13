@@ -14,6 +14,7 @@ import { fetchThirdPartyApps, type ThirdPartyAppsSettings } from "@/lib/api";
 import { getValidatedAuthSession } from "@/lib/auth-session";
 import { cn } from "@/lib/utils";
 import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
+import { optionalNavItems } from "@/config/nav";
 
 const adminNavItems = [
   { href: "/image", label: "生图" },
@@ -107,7 +108,12 @@ export function TopNav() {
     return null;
   }
 
-  const navItems = session.role === "admin" ? adminNavItems : userNavItems;
+  const isNavAllowed = (item: { roles?: string[] }) =>
+    !item.roles || item.roles.length === 0 || (session && item.roles.includes(session.role));
+  const navItems = [
+    ...(session.role === "admin" ? adminNavItems : userNavItems),
+    ...optionalNavItems.filter(isNavAllowed),
+  ];
   const roleLabel = session.role === "admin" ? "管理员" : "普通用户";
   const displayName = session.name.trim() || roleLabel;
   const baseUrl = webConfig.apiUrl.replace(/\/$/, "") || window.location.origin;

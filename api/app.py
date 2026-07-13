@@ -9,10 +9,15 @@ from fastapi.responses import FileResponse
 
 from api import accounts, ai, image_tasks, system
 from api.errors import install_exception_handlers
+from api.feature_registry import get_optional_routers
 from api.support import resolve_web_asset, start_limited_account_watcher
 from services.backup_service import backup_service
 from services.config import config
 from services.image_service import start_image_cleanup_scheduler
+
+# 触发可选/本地功能路由的自注册（如注册机）。新增本地功能只改 feature_registry，
+# 无需再改动本文件。
+import api.register  # noqa: F401
 
 
 def create_app() -> FastAPI:
@@ -46,6 +51,11 @@ def create_app() -> FastAPI:
     app.include_router(accounts.create_router())
     app.include_router(image_tasks.create_router())
     app.include_router(system.create_router(app_version))
+
+    # 一次性接入：挂载所有可选/本地功能路由（含注册机）。
+    # 必须放在 catch-all 兜底路由之前，否则 /api/register* 会被静态兜底拦截。
+    for _optional_router in get_optional_routers():
+        app.include_router(_optional_router)
 
     @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def serve_web(full_path: str):

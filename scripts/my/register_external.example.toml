@@ -1,0 +1,78 @@
+# 外置注册脚本配置文件。
+# 运行脚本时不需要传命令行参数：
+# uv run python scripts/my/register_external.py
+
+[register]
+# 本次要注册的账号数量。脚本会提交这么多个注册任务。
+total = 1
+
+# 并发线程数。建议先从 1 开始，代理和邮箱服务稳定后再调大。
+threads = 1
+
+# 注册链路使用的代理地址。留空表示直连。
+# 支持示例：
+# proxy = "http://127.0.0.1:7890"
+# proxy = "http://user:pass@127.0.0.1:7890"
+# proxy = "socks5h://127.0.0.1:7890"
+proxy = ""
+
+# 单个注册任务失败后的重试次数。0 表示不重试。
+retry_per_task = 0
+
+# 只校验配置，不执行真实注册。第一次配置时建议先设为 true。
+dry_run = true
+
+# 失败导入重放文件路径。留空表示执行注册任务。
+# 如果填写，例如 "data/external-register-failed-imports.jsonl"，脚本只会把其中的账号重放推送到远程实例。
+replay_failed_path = ""
+
+[mail]
+# 邮箱服务单次请求超时时间，单位秒。
+request_timeout = 30
+
+# 等待 OpenAI 注册验证码邮件的最长时间，单位秒。
+wait_timeout = 30
+
+# 轮询邮箱收件箱的间隔，单位秒。
+wait_interval = 2
+
+[[mail.providers]]
+# 是否启用这个邮箱 provider。至少需要一个 provider 的 enable 为 true。
+enable = true
+
+# 邮箱 provider 类型。当前项目支持 cloudmail_gen、cloudflare_temp_email、tempmail_lol、moemail、inbucket、duckmail、gptmail、yyds_mail、ddg_mail。
+type = "tempmail_lol"
+
+# 当前 provider 的 API Key。不同 provider 需要的字段不同，按 Web 注册机页面对应字段填写。
+api_key = "your-tempmail-api-key"
+
+# 邮箱域名列表。留空数组表示使用 provider 默认域名。
+domain = []
+
+[output]
+# 注册成功后的输出目标。
+# 可选值：
+# "stdout"：每个账号输出一行 JSON 到标准输出；
+# "jsonl"：追加写入 JSONL 文件；
+# "json"：脚本结束时写入 JSON 数组文件；
+# "remote"：推送到远程 chatgpt2api 的 /api/accounts。
+sinks = ["jsonl"]
+
+# jsonl sink 的输出文件路径。相对路径按项目根目录计算。
+jsonl_path = "data/external-register-results.jsonl"
+
+# json sink 的输出文件路径。相对路径按项目根目录计算。
+json_path = "data/external-register-results.json"
+
+# 注册失败或远程导入失败的记录文件。远程导入失败时会保留完整账号，方便重放。
+failed_path = "data/external-register-failed-imports.jsonl"
+
+[output.remote]
+# 远程 chatgpt2api 的服务地址。启用 remote sink 或 replay_failed_path 时必填。
+base_url = "https://your-chatgpt2api.example.com"
+
+# 远程 chatgpt2api 的管理员密钥。请求会使用 Authorization: Bearer <admin_key>。
+admin_key = "your-admin-key"
+
+# 调用远程 /api/accounts 的超时时间，单位秒。
+timeout = 60

@@ -1,0 +1,44 @@
+{
+  "mail": {
+    "request_timeout": 30,
+    "wait_timeout": 30,
+    "wait_interval": 2,
+    "providers": [
+      {
+        "enable": true,
+        "type": "tempmail_lol",
+        "api_base": "https://api.tempmail.lol",
+        "admin_email": "",
+        "admin_password": "",
+        "domain": [],
+        "subdomain": [],
+        "email_prefix": "",
+        "api_key": "tempmail.20260521.cdji4tltfwmdbbximej3z23zdmublj95qb9t9nf5vwi2eb14"
+      }
+    ]
+  },
+  "proxy": "",
+  "total": 1,
+  "threads": 1,
+  "mode": "total",
+  "target_quota": 100,
+  "target_available": 10,
+  "check_interval": 5,
+  "enabled": false,
+  "stats": {
+    "job_id": "c9f9ca74506d40c38f98e32655dac534",
+    "success": 0,
+    "fail": 1,
+    "done": 1,
+    "running": 0,
+    "threads": 1,
+    "current_quota": 17,
+    "current_available": 1,
+    "started_at": "2026-07-13T12:26:18.384803+00:00",
+    "updated_at": "2026-07-13T12:26:25.512561+00:00",
+    "elapsed_seconds": 7.1,
+    "avg_seconds": 0,
+    "success_rate": 0.0,
+    "finished_at": "2026-07-13T12:26:25.512525+00:00"
+  }
+}
