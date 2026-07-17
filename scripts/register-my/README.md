@@ -37,6 +37,10 @@ python scripts/register-my/cli.py --config scripts/register-my/register-my.examp
 
 # 仅校验配置
 python scripts/register-my/cli.py --dry-run
+
+
+./scripts/register-my/run.sh --headless --total 2
+
 ```
 
 ## 目录结构
@@ -49,6 +53,37 @@ python scripts/register-my/cli.py --dry-run
 | `register.py` | 注册编排：浏览器 UI 流程 + 邮箱 OTP + token 提取 |
 | `cli.py` | 命令行入口、并发线程池、结果输出（号池/JSONL/远程） |
 | `register-my.example.json` | 配置模板 |
+
+## 导入到项目号池
+
+注册机默认只把结果写到 `output/accounts.jsonl`。若之前的运行没开 `output.write_pool`，
+或你想**手动/批量把 jsonl 里的账号导入本项目号池**，用 `import_accounts.py`：
+
+```bash
+# 默认导入 output/accounts.jsonl 并做后端校验（填充 status/quota）
+python scripts/register-my/import_accounts.py
+
+# 指定来源（支持 JSONL / JSON 数组 / 单条 JSON）
+python scripts/register-my/import_accounts.py --source /path/to/accounts.jsonl
+
+# 只预览不写入
+python scripts/register-my/import_accounts.py --dry-run
+
+# 离线导入（不做后端校验）
+python scripts/register-my/import_accounts.py --no-verify
+
+# 覆盖每条记录的来源标记
+python scripts/register-my/import_accounts.py --source-type browser
+```
+
+脚本直接复用 `services.account_service.add_account_items()`，会：
+- 以 `access_token` 去重（已存在的账号自动跳过，不重复写入）；
+- 按当前项目 storage 后端落盘（默认 JSON，也可 git/sqlite，取决于 `STORAGE_BACKEND` 环境变量）；
+- `--verify` 时调用 `refresh_accounts()` 后端校验并填充 `status`/`quota`。
+
+> 注意：浏览器注册产出的账号 `refresh_token` 通常为空（next-auth 不向 JS 暴露），
+> access_token 过期后只能靠 `email + password` 走项目内置的密码重登兜底；若被 OpenAI
+> 风控作废（报 `token invalidated`），需重新注册或用密码重登恢复。
 
 ## 重要提醒
 
