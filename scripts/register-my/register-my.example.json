@@ -23,12 +23,18 @@
     "timeout": 30000,
     "proxy": "",
     "save_failure_screenshot": true,
-    "screenshot_dir": "data/register-my-screenshots"
+    "screenshot_dir": "scripts/register-my/output/screenshots"
   },
   "output": {
     "write_pool": true,
-    "jsonl_path": "data/register-my-results.jsonl",
+    "jsonl_path": "scripts/register-my/output/accounts.jsonl",
     "remote_base_url": "",
     "remote_admin_key": ""
+  },
+  "log": {
+    "level": "DEBUG",
+    "to_console": true,
+    "to_file": true,
+    "file_path": "scripts/register-my/output/register.log"
   }
 }

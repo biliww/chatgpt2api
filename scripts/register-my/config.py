@@ -51,6 +51,12 @@ DEFAULTS: dict[str, Any] = {
         "remote_base_url": "",       # 非空则推送到远程 /api/accounts
         "remote_admin_key": "",
     },
+    "log": {
+        "level": "INFO",             # DEBUG / INFO / WARN / ERROR
+        "to_console": True,
+        "to_file": False,
+        "file_path": "scripts/register-my/output/register.log",
+    },
 }
 
 
@@ -73,10 +79,12 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
             raise FileNotFoundError(f"配置文件不存在: {p}")
         raw = json.loads(p.read_text(encoding="utf-8"))
     else:
-        # 退回项目根 config-register.json
+        # 独立运行场景：优先用本目录的 config.json；否则退回项目根 config-register.json
+        sibling = Path(__file__).resolve().parent / "config.json"
         root = Path(__file__).resolve().parents[2] / "config-register.json"
-        if root.exists():
-            raw = json.loads(root.read_text(encoding="utf-8"))
+        chosen = sibling if sibling.exists() else (root if root.exists() else None)
+        if chosen:
+            raw = json.loads(chosen.read_text(encoding="utf-8"))
     cfg = _deep_merge(DEFAULTS, raw)
 
     # 兼容：browser.proxy 未显式设置时，继承顶层 proxy

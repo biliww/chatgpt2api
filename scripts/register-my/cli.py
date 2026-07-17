@@ -35,7 +35,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 with contextlib.redirect_stdout(sys.stderr):
     from config import load_config  # noqa: E402
-    from register import make_logger, run_one  # noqa: E402
+    from logger import make_logger  # noqa: E402
+    from register import run_one  # noqa: E402
 
 
 def _mask(value: str, head: int = 8, tail: int = 4) -> str:
@@ -84,7 +85,8 @@ def main() -> int:
     if args.headless:
         cfg["browser"]["headless"] = True
 
-    log = make_logger()
+    log = make_logger(cfg)
+    log.info(f"日志级别: {cfg.get('log', {}).get('level', 'INFO')}")
     providers = []
     for p in cfg.get("mail", {}).get("providers", []) or []:
         if p.get("enable"):

@@ -157,6 +157,14 @@ class Browser:
         """按可见文本点击（更贴近人类操作，抗 DOM 结构微调）。"""
         self._page.get_by_text(text, exact=False).first.click(timeout=timeout or self.timeout)
 
+    def click_by_regex(self, pattern: str, timeout: int | None = None, flags: int = re.IGNORECASE) -> None:
+        """按正则（默认大小写不敏感）匹配可见文本后点击，抗文案大小写/空格差异。"""
+        self._page.get_by_text(re.compile(pattern, flags), exact=False).first.click(timeout=timeout or self.timeout)
+
+    def click_link_by_href(self, substr: str, timeout: int | None = None) -> None:
+        """按链接 href 子串点击（作为文本匹配失败时的兜底，例如注册/登录入口）。"""
+        self._page.locator(f"a[href*='{substr}']").first.click(timeout=timeout or self.timeout)
+
     def fill_by_label(self, label: str, value: str, timeout: int | None = None) -> None:
         """按表单 label 文本填写输入框。"""
         self._page.get_by_label(label, exact=False).fill(value, timeout=timeout or self.timeout)
