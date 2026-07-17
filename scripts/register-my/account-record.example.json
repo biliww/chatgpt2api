@@ -1,0 +1,26 @@
+{
+  "_comment": "浏览器注册机（scripts/register-my）成功注册后产出的『最终接口』账号记录样本。该结构即为本项目 account_service.add_account_items() 所能直接吞入的字段（与 services/register/openai_register.py 的 API 注册机产出字段一致）。后续要『保存到项目中管理』时，只需把这条记录 POST 到 /api/accounts 或调用 account_service.add_account_items([record]) 即可。",
+  "_feasibility": "可行。浏览器完成 OpenAI 注册并落地 chatgpt.com 后，认证态已写入页面 localStorage 与 cookie；register.py 的 _collect_tokens() 据此提取 OAuth 令牌。access_token 与 id_token 可稳定拿到；refresh_token 受 next-auth 限制不一定暴露给 JS，可能为空——此时号池仍可凭 access_token 使用，过期后走密码重登（password_re_login）兜底。",
+  "_how_collected": {
+    "access_token": "来自 chatgpt.com /api/auth/session 的 accessToken 字段（即 OpenAI 会话 JWT，含 https://api.openai.com/auth 声明，可直接用于 backend-api 调用）",
+    "id_token": "来自 /api/auth/session 的 idToken（Auth0 ID Token，JWT）",
+    "refresh_token": "尽力从 cookie 的 refresh_token / __Secure-next-auth.refresh-token 获取；next-auth 通常不向 JS 暴露，可能为空（不影响使用，过期后走密码重登）",
+    "session_token": "来自 cookie __Secure-next-auth.session-token（next-auth 会话令牌，可选，便于复用浏览器态）"
+  },
+  "_field_mapping_to_pool": {
+    "access_token": "→ 号池主键（account_service 以 access_token 去重与索引，refresh_access_token 也靠它定位）",
+    "refresh_token": "→ 用于 refresh_access_token 静默续期；为空时依赖密码重登",
+    "id_token": "→ 导出/校验用，build_export_items 要求 access/refresh/id 三者齐全才导出",
+    "email / password": "→ 账号凭据，密码重登（password_re_login）时回退使用",
+    "source_type": "固定 'browser'，与 API 注册机的 'web' 区分来源",
+    "created_at": "注册完成UTC时间"
+  },
+  "email": "alice_wonder_8842@tempmail.lol",
+  "password": "K7$mPq2wLx9vBn3d",
+  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiItdXNlci1hYmMiLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsidXNlcl9pZCI6Ii11c2VyLWFiYyIsImZlYXR1cmVzIjpbIm1vZGVsLnJlZ2lzdHJhdGlvbiJdfX0.signature",
+  "refresh_token": "ory_at_9xK2mN4pQr7sT1vW8yB3cD6eF0gH5jL2aZ8xK9mN4pQr7sT1vW8",
+  "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiItdXNlci1hYmMiLCJlbWFpbCI6ImFsaWNlQHRlbXBtYWlsLmxvbCJ9.signature",
+  "session_token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..iv.session.sig",
+  "source_type": "browser",
+  "created_at": "2026-07-17T20:15:42.318000+00:00"
+}

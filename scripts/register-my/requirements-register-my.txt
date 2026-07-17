@@ -1,0 +1,10 @@
+# 浏览器注册机（scripts/register-my）依赖
+
+# 浏览器驱动：Playwright（Chromium）
+playwright>=1.40
+
+# 说明：本目录代码复用项目既有 services.register.mail_provider，
+# 因此无需再安装邮箱相关依赖（requests/curl_cffi 已在主项目中提供）。
+
+# 安装后还需下载一次浏览器二进制：
+#   playwright install chromium

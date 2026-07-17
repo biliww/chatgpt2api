@@ -272,7 +272,13 @@ class SentinelTokenGenerator:
         return "gAAAAAB" + self.ERROR_PREFIX + self._b64(str(None))
 
 
-def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -> str:
+def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -> tuple[str, str]:
+    """请求 sentinel token，返回 (openai-sentinel-token 头值, so_token 头值)。
+
+    so_token 与 PoW token 同源：由 sentinel /req 后端在响应 JSON 中随 token 一同下发
+    （字段名 so_token），需原样回传为 ``OpenAI-Sentinel-SO-Token`` 请求头。它并非本地
+    按 sdk.js 算法生成，而是服务端下发、与本次 sentinel 会话绑定。
+    """
     generator = SentinelTokenGenerator(device_id, user_agent)
     resp = session.post(
         "https://sentinel.openai.com/backend-api/sentinel/req",
@@ -293,13 +299,24 @@ def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -
     token = str(data.get("token") or "").strip()
     if resp.status_code != 200 or not token:
         raise RuntimeError(f"sentinel_req_failed_{resp.status_code}")
+    # so_token 随 sentinel req 响应一同下发，需回传为 OpenAI-Sentinel-SO-Token 头
+    so_token = str(data.get("so_token") or "").strip()
     pow_data = data.get("proofofwork") or {}
     p_value = (
         generator.generate_token(str(pow_data.get("seed") or ""), str(pow_data.get("difficulty") or "0"))
         if pow_data.get("required") and pow_data.get("seed")
         else generator.generate_requirements_token()
     )
-    return json.dumps({"p": p_value, "t": "", "c": token, "id": device_id, "flow": flow}, separators=(",", ":"))
+    sentinel_value = json.dumps({"p": p_value, "t": "", "c": token, "id": device_id, "flow": flow}, separators=(",", ":"))
+    return sentinel_value, so_token
+
+
+def set_sentinel_headers(headers: dict, session: requests.Session, device_id: str, flow: str) -> None:
+    """向请求头写入 openai-sentinel-token 与（若服务端下发）OpenAI-Sentinel-SO-Token。"""
+    sentinel_value, so_token = build_sentinel_token(session, device_id, flow)
+    headers["openai-sentinel-token"] = sentinel_value
+    if so_token:
+        headers["OpenAI-Sentinel-SO-Token"] = so_token
 
 
 def create_session(proxy: str = "") -> Any:
@@ -328,7 +345,7 @@ def validate_otp(session: requests.Session, device_id: str, code: str):
     resp, error = request_with_local_retry(session, "post", f"{auth_base}/api/accounts/email-otp/validate", json={"code": code}, headers=headers, verify=False)
     if resp is not None and resp.status_code == 200:
         return resp, ""
-    headers["openai-sentinel-token"] = build_sentinel_token(session, device_id, "authorize_continue")
+    set_sentinel_headers(headers, session, device_id, "authorize_continue")
     resp, error = request_with_local_retry(session, "post", f"{auth_base}/api/accounts/email-otp/validate", json={"code": code}, headers=headers, verify=False)
     return resp, error
 
@@ -444,7 +461,7 @@ class PlatformRegistrar:
     def _register_user(self, email: str, password: str, index: int) -> None:
         step(index, "开始提交注册密码")
         headers = self._json_headers(f"{auth_base}/create-account/password")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "username_password_create")
+        set_sentinel_headers(headers, self.session, self.device_id, "username_password_create")
         resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/user/register", json={"username": email, "password": password}, headers=headers, verify=False)
         if resp is None or resp.status_code != 200:
             data = _response_json(resp) if resp is not None else {}
@@ -476,7 +493,7 @@ class PlatformRegistrar:
     def _create_account(self, name: str, birthdate: str, index: int) -> None:
         step(index, "开始创建账号资料")
         headers = self._json_headers(f"{auth_base}/about-you")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "oauth_create_account")
+        set_sentinel_headers(headers, self.session, self.device_id, "oauth_create_account")
         resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/create_account", json={"name": name, "birthdate": birthdate}, headers=headers, verify=False)
         if resp is None or resp.status_code not in (200, 302):
             data = _response_json(resp) if resp is not None else {}
