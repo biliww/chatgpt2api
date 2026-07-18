@@ -41,15 +41,21 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # 不要让 metadata-action 自动追加 latest（下面用 raw 显式、且始终启用）
+          flavor: |
+            latest=false
           images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # 始终推送 latest，方便后续直接 docker pull :latest 拿到最新构建
+            type=raw,value=latest
+            type=ref,event=branch
             type=ref,event=tag
             type=sha
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -61,3 +67,43 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # 始终输出构建过程日志（默认即为 true，这里显式声明避免被静默）
+          provenance: false
+
+      - name: Show build result (logs)
+        if: success()
+        run: |
+          echo "::group::📦 镜像构建结果"
+          echo "Repository : ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}"
+          echo "Digest     : ${{ steps.build.outputs.digest }}"
+          echo "Platforms  : linux/amd64, linux/arm64"
+          echo ""
+          echo "Tags pushed:"
+          echo '${{ steps.meta.outputs.tags }}' | while IFS= read -r t; do
+            [ -n "$t" ] && echo "  - $t"
+          done
+          echo "::endgroup::"
+
+          # 写一份持久化的 Run Summary，方便在 GitHub Actions 页面随时回看
+          {
+            echo "## 🐳 Docker 镜像已发布"
+            echo ""
+            echo "**仓库：** \`ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}\`"
+            echo ""
+            echo "**Digest：** \`${{ steps.build.outputs.digest }}\`"
+            echo ""
+            echo "**本次推送的标签：**"
+            echo '${{ steps.meta.outputs.tags }}' | sed 's/^/- `/; s/$/`/'
+            echo ""
+            echo "**重新拉取最新镜像：**"
+            echo '```bash'
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Inspect pushed manifest
+        if: success()
+        run: |
+          echo "::group::🔍 检视已推送镜像清单 (latest)"
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          echo "::endgroup::"
