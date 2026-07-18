@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -46,8 +47,34 @@ def _mask(value: str, head: int = 8, tail: int = 4) -> str:
     return f"{value[:head]}...{value[-tail:]}"
 
 
+def _resolve_admin_key(out_cfg: dict, project_root: Path) -> str:
+    """解析用于调用 /api/accounts 的管理员密钥，按优先级：
+    1) output.remote_admin_key 显式配置
+    2) 环境变量 CHATGPT2API_AUTH_KEY
+    3) 回退读取项目根 config.json 的 auth-key
+    """
+    key = str(out_cfg.get("remote_admin_key") or "").strip()
+    if key:
+        return key
+    env_key = os.environ.get("CHATGPT2API_AUTH_KEY", "").strip()
+    if env_key:
+        return env_key
+    try:
+        main_cfg = json.loads((project_root / "config.json").read_text(encoding="utf-8"))
+        ak = str(main_cfg.get("auth-key") or "").strip()
+        if ak:
+            return ak
+    except Exception:
+        pass
+    return ""
+
+
 def _push_remote(base_url: str, admin_key: str, account: dict) -> dict:
-    """把账号推送到远程 chatgpt2api 的 /api/accounts（自动刷新状态）。"""
+    """把账号推送到正在运行的 Web 服务的 /api/accounts（与前端“导入”按钮同一个接口）。
+
+    由主程序在自己的进程内完成 add_account_items + refresh_accounts，
+    缓存天然同步，前端 /accounts/ 立即可见，注册脚本不依赖主程序内部实现。
+    """
     import urllib.request
 
     url = f"{base_url.rstrip('/')}/api/accounts"
@@ -104,22 +131,37 @@ def main() -> int:
     if jsonl_path:
         Path(jsonl_path).parent.mkdir(parents=True, exist_ok=True)
     remote_base = str(out.get("remote_base_url") or "").strip()
-    remote_key = str(out.get("remote_admin_key") or "").strip()
-    write_pool = bool(out.get("write_pool"))
+    remote_key = _resolve_admin_key(out, PROJECT_ROOT)
+    if remote_base:
+        if remote_key:
+            log(f"配置：远程推送已启用 → {remote_base}/api/accounts（鉴权：来自 auth-key）")
+        else:
+            log(f"配置：远程推送目标={remote_base}，但未找到管理员密钥，将只写 jsonl 备份。", "yellow")
+    else:
+        log("配置：未设置 output.remote_base_url，注册成功仅写入本地 jsonl 备份，不推送 Web 服务。", "yellow")
 
     def sink(account: dict) -> None:
+        # 1) 始终写一份 jsonl 备份（即使 Web 服务未启动，也可稍后在前端导入）
         if jsonl_path:
             with open(jsonl_path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(account, ensure_ascii=False) + "\n")
+        # 2) 通过 HTTP 接口推送给正在运行的 Web 服务（与前端“导入”按钮同一接口）
         if remote_base:
-            resp = _push_remote(remote_base, remote_key, account)
-            log(f"远程写入响应: {resp}")
-        if write_pool:
-            with contextlib.redirect_stdout(sys.stderr):
-                from services.account_service import account_service
-
-                account_service.add_account_items([account])
-                account_service.refresh_accounts([account.get("access_token", "")])
+            if not remote_key:
+                log("⚠️ 未配置管理员密钥（output.remote_admin_key / CHATGPT2API_AUTH_KEY / config.json 的 auth-key），"
+                    "无法推送 /api/accounts；账号仅写入 jsonl 备份。", "yellow")
+            else:
+                resp = _push_remote(remote_base, remote_key, account)
+                if resp.get("ok") is False:
+                    log(f"⚠️ 推送到 Web 服务失败（{remote_base}）：{resp.get('error')}；"
+                        f"账号已写入 jsonl 备份，可在前端 /accounts/ 导入或启动 Web 服务后重推。", "yellow")
+                else:
+                    added = int(resp.get("added") or 0)
+                    skipped = int(resp.get("skipped") or 0)
+                    if added:
+                        log(f"已推送到 Web 服务 /api/accounts（前端立即可见）: {account.get('email')}", "green")
+                    elif skipped:
+                        log(f"号池已存在，跳过: {account.get('email')}", "yellow")
 
     success = fail = 0
     total = int(cfg["total"])

@@ -18,6 +18,11 @@
     ]
   },
   "proxy": "",
+  "output": {
+    "jsonl_path": "scripts/register-my/output/accounts.jsonl",
+    "remote_base_url": "http://localhost:8000",
+    "remote_admin_key": ""
+  },
   "total": 10,
   "threads": 2,
   "mode": "total",

@@ -67,15 +67,42 @@ class BrowserRegistrar:
         self.mail_config = cfg["mail"]
         self.browser_cfg = cfg["browser"]
         self.browser: Browser | None = None
+        # 步骤计时：_t0=任务起点，_t_last=上一步时刻（单调时钟，避免系统时间回拨干扰）
+        self._t0: float = 0.0
+        self._t_last: float = 0.0
+        # 后续步骤「已完成」标志：避免提交在途/重定向过渡期内被自适应循环
+        # 误判为「还在本页」而重复填写（曾导致 about-you 提交后空等 ~180s）。
+        self._about_you_done: bool = False
+        self._password_done: bool = False
+
+    # ── 步骤计时 ───────────────────────────────────────────────
+    def _mark_step(self, step: str) -> None:
+        """打印累计耗时与本步耗时的进度标记。
+
+        日志本身已带 [MM-DD HH:MM:SS] 时间戳；此处再补「累计 / 本步」耗时，
+        便于定位注册慢在哪一环（例如 about-you 提交后到落地 chatgpt.com 的间隔）。
+        """
+        now = time.monotonic()
+        if not self._t0:
+            self._t0 = now
+            self._t_last = now
+        total = now - self._t0
+        delta = now - self._t_last
+        self._t_last = now
+        self.log.info(
+            f"[任务{self.index}] ▶ {step} | 累计 {total:.1f}s | 本步 {delta:.1f}s"
+        )
 
     # ── 对外主流程 ─────────────────────────────────────────────
     def register(self) -> dict:
+        self._mark_step("任务开始")
         mailbox = create_mailbox(self.mail_config)
         email = str(mailbox.get("address") or "").strip()
         if not email:
             raise RuntimeError("邮箱服务未返回 address")
         label = str(mailbox.get("label") or mailbox.get("provider") or "")
         self.log.info(f"[任务{self.index}] 邮箱创建完成[{label}]: {email}")
+        self._mark_step("创建邮箱完成")
 
         password = _random_password()
         first, last = _random_name()
@@ -86,6 +113,7 @@ class BrowserRegistrar:
             self.browser = self._make_browser()
             self.browser.launch()
             self.log.debug(f"[任务{self.index}] 浏览器已启动 headless={self.browser_cfg.get('headless')} proxy={self.browser_cfg.get('proxy') or '无'}")
+            self._mark_step("浏览器启动")
             self._signup(email, password, first, last, birthdate, mailbox)
             tokens = self._collect_tokens()
             cost = time.time() - started
@@ -183,6 +211,7 @@ class BrowserRegistrar:
 
         # ── Step 1: 点击注册入口 ──
         self._click_signup_entry()
+        self._mark_step("进入邮箱输入页")
         self._dump_page_state("after-signup-entry")
 
         # ── Step 2: 填写邮箱并提交 ──
@@ -194,6 +223,7 @@ class BrowserRegistrar:
         self.log.debug(f"[任务{self.index}] 已提交邮箱，等待 OTP 验证页面...")
         b.wait_for_url(r"(email-verification|check.your.inbox|auth\.openai\.com)", timeout=30000)
         b.wait(2)
+        self._mark_step("提交邮箱→到达OTP页")
         self._dump_page_state("otp-page")
 
         # ── Step 3: OTP 邮箱验证（在 password 之前！）──
@@ -202,15 +232,18 @@ class BrowserRegistrar:
         if not code:
             raise RuntimeError("等待注册验证码超时")
         self.log.info(f"[任务{self.index}] 收到验证码: {code}")
+        self._mark_step("收到验证码")
         self._fill_otp(code)
         self._dump_page_state("otp-filled")
         self._click_form_continue()
         b.wait(3)
+        self._mark_step("提交验证码")
         self._dump_page_state("after-otp")
 
         # ── Step 4+: OTP 之后的步骤顺序不固定（about-you / password 先后不定）──
         # 采用自适应循环：识别当前页面类型并填表，直到落地 chatgpt.com。
         self._complete_remaining_steps(first, last, birthdate, password)
+        self._mark_step("后续步骤完成")
 
         # ── 最后：等待落地到 chatgpt.com（非 auth 页）──
         self.log.info(f"[任务{self.index}] 等待注册完成落地")
@@ -220,6 +253,7 @@ class BrowserRegistrar:
             self.log.warn(f"[任务{self.index}] 60s 内未落地 chatgpt.com，当前 url={b.url}")
             self._dump_page_state("landing-timeout")
         b.wait(3)  # 让会话 cookie 稳定写入
+        self._mark_step("会话cookie稳定，注册流程结束")
 
     def _page_has(self, selector: str) -> bool:
         b = self.browser
@@ -228,6 +262,58 @@ class BrowserRegistrar:
             return b._page.locator(selector).count() > 0
         except Exception:
             return False
+
+    def _is_error_page(self) -> bool:
+        """识别 OpenAI 的临时错误页（"Oops, an error occurred!" + 仅 Try again）。
+
+        OTP 提交后 OpenAI 偶发返回该页（服务端瞬时故障 / 风控），页面无任何表单
+        输入框、只剩 "Try again"。需专门识别，避免掉进"未识别页面"兜底分支里
+        用 _click_form_continue 挨个试选择器空等 ~40s。
+        """
+        b = self.browser
+        assert b is not None
+        try:
+            title = (b._page.title() or "").lower()
+        except Exception:
+            title = ""
+        if "error occurred" in title or "oops" in title:
+            return True
+        try:
+            has_try_again = b._page.get_by_text("Try again", exact=False).count() > 0
+        except Exception:
+            has_try_again = False
+        if has_try_again and not self._page_has(
+            "input[name='code'], input[name='name'], input[type='password'], input[type='email']"
+        ):
+            return True
+        return False
+
+    def _about_you_filled(self) -> bool:
+        """about-you 的姓名框是否已填好（用于避免提交在途时重复填写导致竞态）。"""
+        b = self.browser
+        assert b is not None
+        try:
+            el = b._page.locator("input[name='name'], input[placeholder*='Full name' i]").first
+            if el.count() and (el.input_value() or "").strip():
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _wait_until_gone(self, selector: str, timeout: float = 30000) -> bool:
+        """轮询直到给定选择器从页面消失（说明上一步提交已生效、页面已跳转）。
+
+        用于在点完 Continue/提交后，等待页面真正离开当前步骤，避免“提交在途、
+        页面尚未跳走”的窗口期内被自适应循环误判为“还在本页”而重复填写。
+        """
+        b = self.browser
+        assert b is not None
+        deadline = time.time() + timeout / 1000.0
+        while time.time() < deadline:
+            if not self._page_has(selector):
+                return True
+            b.wait(1)
+        return False
 
     def _complete_remaining_steps(self, first: str, last: str, birthdate: str, password: str) -> None:
         """OTP 之后自适应的后续步骤循环：
@@ -245,36 +331,53 @@ class BrowserRegistrar:
             self.log.debug(f"[任务{self.index}] 后续步骤[{step}] url={url}")
             self._dump_page_state(f"post-otp-{step}")
 
+            # 实时重读当前 URL（重定向过渡期 url 会滞后，必须用最新值判定落地）
+            live_url = b.url or ""
+
             # 已落地 chatgpt.com（非 auth 子页）
-            if _re.search(r"chatgpt\.com/(?!auth|login|email-verification|about-you)", url or ""):
+            if _re.search(r"chatgpt\.com/(?!auth|login|email-verification|about-you)", live_url):
                 self.log.info(f"[任务{self.index}] 已落地 chatgpt.com")
+                self._mark_step("已落地 chatgpt.com")
                 return
 
             # about-you 页面：含 Full name / Age（"How old are you?"）
-            if "about-you" in (url or "") or self._page_has("input[name='name'], input[placeholder*='Full name' i]") \
-                    or self._page_has("input[name='age'], input[placeholder*='Age' i]"):
+            # 关键：用「已完成」标志拦截重复填写——一旦提交过 about-you 就不再进该分支，
+            # 否则重定向过渡期 url 仍停留在 about-you 时会被误判为「还在本页」而空等。
+            if not self._about_you_done and (
+                "about-you" in live_url
+                or self._page_has("input[name='name'], input[placeholder*='Full name' i]")
+                or self._page_has("input[name='age'], input[placeholder*='Age' i]")
+            ):
                 self.log.info(f"[任务{self.index}] 填写 about-you（姓名 + 年龄）")
+                self._mark_step("开始填写 about-you")
                 self._fill_about_you(first, last, birthdate)
                 self._dump_page_state("about-you-filled")
                 self._click_form_continue()
-                b.wait(3)
+                self._about_you_done = True
+                self._mark_step("提交 about-you（等待跳转）")
+                # 等待本次提交生效、about-you 输入消失（页面已跳转）再进入下一轮，
+                # 避免“提交在途、页面未跳走”窗口期内被误判为仍在本页而重复填写。
+                self._wait_until_gone("input[name='name'], input[placeholder*='Full name' i]", timeout=30000)
                 continue
 
             # 创建密码页面
-            if self._page_has("input[type='password']"):
+            if not self._password_done and self._page_has("input[type='password']"):
                 self.log.info(f"[任务{self.index}] 填写密码")
+                self._mark_step("填写密码")
                 self._fill_password(password)
                 self._dump_page_state("password-filled")
                 self._click_form_continue()
-                b.wait(3)
+                self._password_done = True
+                self._mark_step("提交密码")
+                self._wait_until_gone("input[type='password']", timeout=30000)
                 continue
 
             # 未知页面：尝试点 Continue 推进（可能是问卷/欢迎页）
-            self.log.warn(f"[任务{self.index}] 遇到未识别页面，尝试点击 Continue 推进: url={url}")
+            self.log.warn(f"[任务{self.index}] 遇到未识别页面，尝试点击 Continue 推进: url={live_url}")
             try:
                 self._click_form_continue()
             except Exception:
-                self.log.error(f"[任务{self.index}] 未识别页面且无法推进，停止后续步骤: url={url}")
+                self.log.error(f"[任务{self.index}] 未识别页面且无法推进，停止后续步骤: url={live_url}")
                 self._dump_page_state("stuck")
                 return
             b.wait(3)
@@ -455,34 +558,36 @@ class BrowserRegistrar:
         full = f"{first} {last}"
         # 当前 about-you 页面（"How old are you?"）：Full name + Age
         # 兼容旧版：First name / Last name + 生日
+        # 统一短超时（8s）：即便被误调用到非 about-you 页面，也快速失败而非卡死等待。
+        TO = 8000
         # 1) 姓名
         try:
-            b.fill("input[name='name'], input[placeholder*='Full name' i], input[id*='name' i]", full)
+            b.fill("input[name='name'], input[placeholder*='Full name' i], input[id*='name' i]", full, timeout=TO)
             self.log.debug(f"[任务{self.index}] 已填写 Full name: {full}")
         except Exception:
             try:
-                b.fill_by_label("First name", first)
-                b.fill_by_label("Last name", last)
+                b.fill_by_label("First name", first, timeout=TO)
+                b.fill_by_label("Last name", last, timeout=TO)
             except Exception:
                 try:
-                    b.fill("input[name='firstName'], input[name='first']", first)
-                    b.fill("input[name='lastName'], input[name='last']", last)
+                    b.fill("input[name='firstName'], input[name='first']", first, timeout=TO)
+                    b.fill("input[name='lastName'], input[name='last']", last, timeout=TO)
                 except Exception:
                     self.log.warn(f"[任务{self.index}] 姓名填写失败，请检查 about-you 选择器")
         # 2) 年龄 / 生日
         try:
             age = str(random.randint(20, 34))
-            b.fill("input[name='age'], input[placeholder*='Age' i]", age)
+            b.fill("input[name='age'], input[placeholder*='Age' i]", age, timeout=TO)
             self.log.debug(f"[任务{self.index}] 已填写 Age: {age}")
         except Exception:
             try:
                 y, m, d = birthdate.split("-")
-                b.fill("input[type='date']", birthdate)
+                b.fill("input[type='date']", birthdate, timeout=TO)
             except Exception:
                 try:
-                    b.fill("select[name='birthdateMonth'], select[name='month']", m)
-                    b.fill("select[name='birthdateDay'], select[name='day']", d)
-                    b.fill("select[name='birthdateYear'], select[name='year']", y)
+                    b.fill("select[name='birthdateMonth'], select[name='month']", m, timeout=TO)
+                    b.fill("select[name='birthdateDay'], select[name='day']", d, timeout=TO)
+                    b.fill("select[name='birthdateYear'], select[name='year']", y, timeout=TO)
                 except Exception:
                     self.log.warn(f"[任务{self.index}] 年龄/生日填写跳过（页面结构不匹配）")
 
